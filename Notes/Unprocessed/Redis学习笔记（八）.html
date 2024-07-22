@@ -1,0 +1,50 @@
+<h2><span style="font-family: 黑体, 'Heiti SC'; font-size: 18pt;"><strong>一、初识Redis集群</strong></span></h2>
+<h3><span style="font-family: 黑体, 'Heiti SC'; font-size: 14pt;"><strong>1.基本概念</strong></span></h3>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">1）由于数据量过大，单个master复制集（复制集包括一个master和多个slave）难以承受，需要多个复制集进行集群，这样形成的水平扩展的每个复制集都只负责存储整个数据集的一部分（实现了负载均衡），这就是Redis集群。</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">2）Redis集群的作用就是提供在多个Redis节点间共享数据的程序集。</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">注：</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">1）Redis集群可以支持多个master，每个master后又可以挂载多个slave。</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">2）由于Redis集群自带哨兵故障的故障转移机制，内置了高可用的支持，因为无需再在集群中使用哨兵功能。</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">3）客户端连接Redis集群中的任意一个master即可取得数据，不需要连接集群中的所有的master。</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">4）槽位slot负责分配到各个物理服务节点，由对应的集群来负责维护节点，插槽和数据之间的关系。Redis集群槽位的数量最多是16384个，Redis集群中建议节点的数量不要超过1000个。</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">5）Redis集群没有使用一致性hash，而是引入了哈希槽的概念，槽位slot即哈希槽。</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">6）Redis节点包括主节点和从节点,本文中节点均指主从节点，若特意区分，会在节点前用master或slave标注（即master节点和slave节点）。</span></p>
+<p>&nbsp;</p>
+<h3><span style="font-family: 黑体, 'Heiti SC'; font-size: 14pt;"><strong>2.进阶概念与算法</strong></span></h3>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">1）Redis集群有16384个哈希槽，每个键值对（key-value）写进Redis集群中时，它的key通过CRC16校验后会对16384取模 [即CRC16（key）mod 16384] ，由算出来的值决定将这个键值对放入哪个槽位中，集群中的每个master又负责一部分hash槽。</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">注：hash槽的数量为16384。上述描述Redis集群的过程中提到了两点，一是每个复制集都只负责存储整个数据集的一部分，二是Redis集群的作用就是提供在多个Redis节点间共享数据的程序集。这两个是否描述冲突？前者说节点之间负载均衡，后者说节点之间数据共享。其实并未冲突，负载均衡是确确实实的，但是后者的数据共享应该这么理解。例如我们访问Redis集群，master1接待了我们的客户端，但是我们要的数据在master2上，我们给出键值对的key后，Redis服务端会对我们的key进行CRC16校验，然后对16384取模算出我们的数据的哈希槽在哪里。master1在意识到数据的哈希槽由master2管理后，会将客户端重定向到负责该槽位的目标节点上，由目标节点进行相关操作，这就是数据共享。数据共享（客户端在不同节点之间的数据访问）并不意味着负载均衡的失败，他们是相辅相成的。</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">&nbsp;</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">2）使用Redis集群的时候我们会将存储的数据分散到多台Redis机器上，集群的每个Redis实例都被认为是整个数据的分片。简而言之，分片就是每个master对应管理的一部分hash槽。对于给定的key来说，它将多次始终映射到同一个分片之上。</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">&nbsp;</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">3）分片与哈希槽的概念的引入，方便了Redis集群的扩容与缩容和数据分派查找。后者可以理解，下面对前者做出部分解释</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">若Redis集群中存在3个master节点A、B、C，现在要加入第四个master节点D，我们只需要从A、B、C上匀一点哈希槽到第四个master节点D上即可。若想删除master节点A，则将A的哈希槽给剩下的master节点即可，然后将没有哈希槽的master节点A从集群中移除。在以上的过程中，从一个节点将哈希槽移到另一个节点并不会让Redis集群停止服务。所以，无论添加或者删除或者改变某个节点的哈希槽的数量都不会造成Redis集群不可用。</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">&nbsp;</span></p>
+<p><span style="font-family: 宋体, 'Songti SC';"><span style="font-size: 18px;">4）槽位slot映射的算法</span></span></p>
+<p><strong><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">算法一、哈希取余分区</span></strong></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">&nbsp; 这是最简单粗暴的算法之一，即 &ldquo;hash（key）% Redis集群的master节点数&rdquo;。经过这个算法的键值对会得出一个哈希值，这个哈希值决定了将键值对映射到Redis集群的哪个master节点之上。这个算法很好的起到了负载均衡与分而治之的作用，但是Redis集群的master节点数一旦变动（新增master节点或者集群中的一个master节点宕机），将会造成取模公式的动态变化，这个过程是自动的。而明面上，取模公式仍是对原来的master节点数取模。例如，k1应该落在0号master节点上，但是实际上因为master节点数的变动它落在1号master节点上，这样数据就乱了，整个数据重新洗牌，路径依赖也消失了。</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">&nbsp;</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;"><strong>算法二、一致性哈希算法分区</strong></span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">目的：当服务器（Redis集群的master节点数）个数发生变动时，尽量减少影响客户端到服务器的映射关系。</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">&nbsp;</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">构建算法步骤：</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">第一，构建一致性哈希环</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">一致性哈希算法必然有个hash函数并按照算法产生hash值，这个算法所有可能的hash值会构成一个全量集，这个集合可以成为一个hash空间。假设这个hash空间的下标是从0到2^32-1（哈希空间大小为2^32），我们可以通过适当的逻辑控制将线性的下标首尾相连（例如使0=2^32），这样我们就构建出了一个逻辑上的环形空间。哈希取余分区算法是对Redis集群的master节点数进行取模，这样可能会由于master节点个数的变动导致数据的重新洗牌，而一致性哈希算法是对hash空间的大小取模，这样我们每一个key经过hash函数计算（hash（key））再取模的结果就对应哈希环上的一个值。</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">&nbsp;</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">第二，Redis服务器ip节点映射</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">即将集群中的各个master节点的ip经过hash函数的计算（hash（ip））映射到哈希环上的一个位置。</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">注：不一定只可以使用ip进行映射，还可以使用主机名等关键字进行哈希。</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">&nbsp;</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">第三，落键key到各个master节点的规则</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 由上面两步我们在哈希环上定位了master节点在hash环上的位置，现在我们有键值对k1-v1，我们要将它也落在hash 环上。采取与&rdquo;Redis服务器ip节点映射&rdquo;同样的hash函数并对hash环大小取模，我们可以计算出k1-v1键值对在哈希环上的落点。然后按照顺时针方向选取master节点作为落点的原则，将k1-v1键值对放入对应的master节点中。例如，哈希环的大小为12（下标从0到11），master节点有4个A、B、C、D，下标分别落在0，4，6，9，哈希环顺时针方向为下标0到11。通过hash函数以及取模运算出k1在哈希环上下标为3的一点，那么master节点B应该就是k1的落点。</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">算法优缺点：</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">哈希取余分区算法若存在master节点的数量变动会导致整个数据的重新洗牌，而一致性哈希算法只会导致部分数据收到影响。以构建算法步骤中第三步的例子为例，若master节点B宕机，其一，键值对k1-v1会按顺时针存储进master节点C。其二，受到影响的数据不再是整个数据集，而是整个数据集中的一段数据，即key经过hash函数以及取模运算后落在哈希环上master节点A到master节点B段的数据。同样的，若我们想加入新的master节点X，将他放在master节点A、B之间，我们只需要将哈希环上A到X这一段的数据录入到master节点X中就行了。总的来说，一致性哈希算法使得当master节点数变动时，数据并不会整体洗牌，而是部分洗牌，这使得一致性哈希算法拥有容错性（宕机）和扩展性（扩展master节点）。但是一致性哈希算法容易造成数据倾斜的问题，比如master节点只有两个A、B，他们经过hash函数与取模落在hash环上。这样就将哈希环分成了两段弧，AB和BA，若AB弧占哈希环的三分之二，那么落在master节点B上的数据按照概率来说就比master节点A上的数据多，这就是数据倾斜，造成了数据存储分布不均匀的缺点。</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">&nbsp;</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;"><strong>算法三、哈希槽分区</strong></span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">哈希槽实质上就是一个数组，它处在数据和节点之间，用于管理数据和节点之间的关系。引入哈希槽后，数据、节点、哈希槽的关系就是节点存放哈希槽，哈希槽中又存放数据。集群会记录节点和哈希槽的对应关系。槽解决了粒度问题，相当于把粒度变大了，这样数据移动就变得容易了。哈希解决的是映射问题，使用key 的哈希值来计算所在的哈希槽，便于数据的分配。</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">Redis集群中内置了16384个哈希槽，Redis会根据master节点数量大致均等的将哈希槽映射到不同的master节点。哈希槽分区的算法在前面已经提过，即CRC16（key）mod 16384。但是CRC16算法可以产生2^16（65536个）值，为什么哈希槽只有16384个呢？原因有三点，第一，如果槽位是65536个，发送的心跳包就过于庞大，而每秒钟redis节点都需要发送一定数量的ping消息作为心跳包，心跳包的庞大使得带宽可能会被浪费。第二，Redis集群的节点数量基本不可能超过1000个，因为超过1000个可能会导致网络拥堵，而对于1000以内的节点数，16384个槽位是够用的。第三，槽位越少，节点数越少的情况下，压缩比高，传输速率就快。</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">&nbsp;</span></p>
+<p><span style="font-family: 宋体, 'Songti SC'; font-size: 18px;">注：Redis集群是采用异步复制的方式在主从之间传输数据的，Redis集群也不保证强一致性。这就意味着在特定的情况下，Redis集群可能会丢失一些被系统收到的写入请求命令。例如，master1和slave1是Redis中的一对主从，master1写入了三条命令，slave1在复制第三条写命令的时候master1宕机了，slave1就会复制第三条写命令失败，数据就会丢失。</span></p>
+<br clear="all" />
+<p align="left">&nbsp;</p>
+<p>&nbsp;</p>
