@@ -229,7 +229,47 @@ innodb_index_stats 表的主键是`(database_name,table_name,index_name,stat_nam
 
 ---
 
+索引列不重复的值的数量，这个值相当有用，它的主要应用场景有两个：
 
+* 单表查询中单点区间太多。例如：
+
+  ```mysql
+  SELECT * FROM tbl_name WHERE key IN ('xx1', 'xx2', ..., 'xxn');
+  ```
+
+  回顾第十二章的笔记，通过直接访问索引对应的 B+ 树来计算某个范围区间对应的索引记录条数的方式（即 **Index Dive** ）太过于耗费性能，所以我们在进行成本计算时，对于单表查询中单点区间太多的情况，直接依赖统计数据中的平均一个值重复多少行来计算单点区间对应的记录数量明显更好。
+
+* 连接查询时，若有涉及两个表的等值匹配连接条件，该连接条件对应的被驱动表中的列又拥有索引时，则可以使用 ref 访问方法来对被驱动表进行查询。例如：
+
+  ```mysql
+  SELECT * FROM t1 JOIN t2 ON t1.column = t2.key WHERE ...;
+  ```
+
+  计算连接查询的成本，假如 t2 表是被驱动表，那么可知，由于 `t1.comumn` 是不确定的，以至于我们也不能通过 index dive 的方式直接访问 B+ 树索引去统计每个单点区间对应的记录的数量，所以理所当然的，我们也只能直接依赖统计数据中的平均一个值重复多少行来计算单点区间对应的记录数量。
+
+那计算索引列不重复的值的数量时，索引列存在 NULL 值怎么办？如何看待 NULL 值？
+
+此时存在一个名为`innodb_stats_method`的系统变量，它存在三个值，代表三种情况：
+
+* nulls_equal：认为所有 NULL 值都是相等的，这也是系统变量 innodb_stats_method 的默认值。也就是说，无论多少个 NULL 值只看作一个进入到计算索引列不重复的值的数量过程中。若索引列中 NULL 值特别多，那么会让优化器认为某个列中平均一个值重复次数特别多，更倾向于不使用索引进行访问。
+* nulls_unequal：认为所有 NULL 值都是不相等的。若索引列中 NULL 值特别多，那么会让优化器认为某个列中平均一个值重复次数特别少，更倾向于使用索引进行访问。
+* nulls_ignored： 忽略 NULL 值。
+
+使用系统变量 innodb_stats_method 我们可以自己设定在计算索引列不重复的值的数量的过程中如何看待 NULL 值，当然，更好的方式，就是**不在索引列中存放NULL值。**
+
+<br />
+
+## 总结
+
+---
+
+1. InnoDB 以表为单位来收集统计数据，这些统计数据可以是基于磁盘的永久性统计数据，也可以是基于内存的非永久性统计数据。
+2. 系统变量`innodb_stats_persistent`控制着使用永久性统计数据还是非永久性统计数据。
+3. 系统变量`innodb_stats_persistent_sample_pages`控制着永久性统计数据的采样页面数量。
+4. 系统变量`innodb_stats_transient_sample_pages`控制着非永久性统计数据的采样页面数量。
+5. 系统变量`innodb_stats_auto_recalc`控制着是否自动重新计算统计数据。
+6. 我们可以针对某个具体的表，在创建和修改表时通过指定`STATS_PERSISTENT`、`STATS_AUTO_RECALC`、`STATS_SAMPLE_PAGES`属性的值来控制相关统计数据属性。
+7. 系统变量`innodb_stats_method`决定着在统计某个索引列不重复值的数量时如何对待`NULL`值。
 
 
 
