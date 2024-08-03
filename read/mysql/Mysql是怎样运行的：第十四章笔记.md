@@ -140,9 +140,74 @@ WHERE 被驱动表列n1 IS NOT NULL;
 WHERE 被驱动表列n1 = 2
 ```
 
+在被驱动表的 WHERE 子句符合空值拒绝的条件后，外连接和内连接可以相互转换。查询优化器可以通过评估表的不同连接顺序的成本，选出成本最低的那种连接顺序来执行查询。
 
+<br />
 
+## 子查询优化
 
+---
 
+出现在某个查询语句的某个位置中的查询被称为**子查询**，而这个某个查询，就是**外层查询。**子查询可以在对应外层查询的各种位置出现，例如：
 
+* SELECT 子句中。
+
+  ```mysql
+  SELECT (SELECT m1 FROM t1 LIMIT 1);
+  ```
+
+* FROM 子句中。
+
+  ```mysql
+  -- 子查询结果集组成的表称之为派生表，下面的 t 表便是派生表
+  SELECT m, n FROM (SELECT m2 + 1 AS m, n2 AS n FROM t2 WHERE m2 > 2) AS t;
+  ```
+
+* WHERE 或 ON 子句中。
+
+  ```mysql
+  SELECT * FROM t1 WHERE m1 IN (SELECT m2 FROM t2);
+  ```
+
+* ORDER BY 子句中。
+
+* GROUP BY 子句中。
+
+<br />
+
+### 按返回的结果集区分子查询
+
+---
+
+按返回的不同结果集类型，把子查询分为不同的类型，如下：
+
+* 标量子查询。即只返回一个单一值的子查询，这个单一的值，也被称为**标量**。
+
+  ```mysql
+  -- 例1：子查询返回 t1 表一条记录的 m1 列的值
+  SELECT (SELECT m1 FROM t1 LIMIT 1);
+  
+  -- 例2：子查询返回 t2 表 m2 列的最小值
+  SELECT * FROM t1 WHERE m1 = (SELECT MIN(m2) FROM t2);
+  ```
+
+* 行子查询。即只返回一条记录的子查询，但这条记录包括多个列。
+
+  ```mysql
+  -- 例：子查询返回 t2 表一条记录的 m1 和 n1 列的值
+  SELECT * FROM t1 WHERE (m1, n1) = (SELECT m2, n2 FROM t2 LIMIT 1);
+  ```
+
+* 列子查询。即返回一个列多条记录的子查询，不能只返回一条记录，否则是标量子查询。
+
+  ```mysql
+  -- 例：子查询返回 t2 表多条记录的 m2 列的值
+  SELECT * FROM t1 WHERE m1 IN (SELECT m2 FROM t2);
+  ```
+
+* 表子查询。即返回多条记录，每条记录包含多个列的子查询。
+
+  ```mysql
+  -- 例：子查询返回 t2 表的多条记录，每条记录包含 m2 和 n2 列的值
+  SELECT * FROM t1 WHERE (m1, n1) IN (SELECT m2, n2 FROM t2);
 
