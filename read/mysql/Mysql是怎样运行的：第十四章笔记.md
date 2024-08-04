@@ -148,6 +148,21 @@ WHERE 被驱动表列n1 = 2
 
 ---
 
+现给出两个表 t1 和 t2，他们的结构如下：
+
+```mysql
+CREATE TABLE t1 (
+    m1 int, 
+    n1 char(1)
+) Engine=InnoDB, CHARSET=utf8;
+
+CREATE TABLE t2 (
+    m2 int, 
+    n2 char(1)
+) Engine=InnoDB, CHARSET=utf8;
+
+```
+
 出现在某个查询语句的某个位置中的查询被称为**子查询**，而这个某个查询，就是**外层查询。**子查询可以在对应外层查询的各种位置出现，例如：
 
 * SELECT 子句中。
@@ -210,4 +225,226 @@ WHERE 被驱动表列n1 = 2
   ```mysql
   -- 例：子查询返回 t2 表的多条记录，每条记录包含 m2 和 n2 列的值
   SELECT * FROM t1 WHERE (m1, n1) IN (SELECT m2, n2 FROM t2);
+
+<br />
+
+### 按与外层查询关系来区分子查询
+
+---
+
+子查询不依赖于外层查询的值就可以查询出结果，这样的子查询被称为**不相关子查询**。而子查询依赖于外层查询的值才可以查询出结果，这样的子查询被称为**相关子查询**。
+
+<br />
+
+### 子查询在布尔表达式中的使用
+
+---
+
+我们总结一下在布尔表达式中使用子查询的场景。
+
+* 使用`=`、`>`、`<`、`>=`、`<=`、`<>`、`!=`、`<=>`作为布尔表达式的操作符。我们给这些操作符一个名字，为 `comparison_operator`，那么，子查询组成的布尔表达式如下：
+
+  ```mysql
+  -- 操作数可以为某个列名、一个常量或一个更复杂的表达式，甚至是另一个子查询
+  操作数 comparison_operator (子查询)
+  ```
+
+  这里的子查询必须是标量子查询或行子查询，也就是子查询的结果只能返回一个单一的值或者只能是一条记录。例如：
+
+  ```mysql
+  -- 标量子查询
+  SELECT * FROM t1 WHERE m1 < (SELECT MIN(m2) FROM t2);
+  
+  -- 行子查询
+  SELECT * FROM t1 WHERE (m1, n1) = (SELECT m2, n2 FROM t2 LIMIT 1);
+  ```
+
+* [NOT] IN/ANY/SOME/ALL子查询。这是对于集合而言的，即 MySQL 通过如下的语法来支持操作数和一个集合组成一个布尔表达式：
+
+  * `IN`或者`NOT IN`。用来判断某个操作数在不在由子查询结果集组成的集合中。
+
+    ```mysql
+    -- 语法
+    操作数 [NOT] IN (子查询)
+    
+    -- 例子
+    SELECT * FROM t1 WHERE (m1, n2) IN (SELECT m2, n2 FROM t2);
+    ```
+
+  * `ANY/SOME`（`ANY`和`SOME`是同义词）。即只要子查询结果集中存在某个值和给定的操作数做比较结果为`TRUE`，那么整个表达式的结果就为`TRUE`。
+
+    ```mysql
+    -- 例子，下面两句 SQL 等价
+    SELECT * FROM t1 WHERE m1 > ANY(SELECT m2 FROM t2);
+    SELECT * FROM t1 WHERE m1 > (SELECT MIN(m2) FROM t2);
+    ```
+
+    **注意：`= ANY`相当于`IN`。**
+
+  * ALL 。即子查询结果集中所有的值和给定的操作数做比较结果为`TRUE`，那么整个表达式的结果就为`TRUE`。
+
+    ```mysql
+    -- 例子，下面两句 SQL 等价
+    SELECT * FROM t1 WHERE m1 > ALL(SELECT m2 FROM t2);
+    SELECT * FROM t1 WHERE m1 > (SELECT MAX(m2) FROM t2);
+    ```
+
+  * EXISTS 子查询。即有的时候我们仅仅需要判断子查询的结果集中是否有记录，而不在乎它的记录具体是什么，可以使用把`EXISTS`或者`NOT EXISTS`放在子查询语句前面。
+
+    ```mysql
+    -- 例子
+    SELECT * FROM t1 WHERE EXISTS (SELECT 1 FROM t2);
+    ```
+
+    我们只关心子查询`(SELECT 1 FROM t2)`的结果集中是否有记录，如果存在记录则整个`EXISTS`表达式的结果就为`TRUE`。
+
+<br />
+
+### 子查询语法注意事项
+
+---
+
+话不多说，注意事项如下：
+
+* 子查询必须用小括号括起来。
+
+* 在 SELECT 子句中的子查询必须是标量子查询。
+
+  ```mysql
+  -- 例子：非法子查询，子查询结果集中有多个列或者多个行
+  SELECT (SELECT m1, n1 FROM t1);
+  ```
+
+* 想要得到标量子查询或者行子查询，但又不能保证子查询的结果集只有一条记录时，应该使用`LIMIT 1`语句来限制记录数量。
+
+* 对于`[NOT] IN/ANY/SOME/ALL`子查询来说，子查询中不允许有`LIMIT`语句（硬性规定）。
+
+  ```mysql
+  -- 例子：非法子查询
+  SELECT * FROM t1 WHERE m1 IN (SELECT * FROM t2 LIMIT 2);
+  ```
+
+  因为`[NOT] IN/ANY/SOME/ALL`子查询不支持`LIMIT`语句，所以子查询中的一些语句也就显得十分的多余。
+
+  * `ORDER BY`子句。
+
+    ```mysql
+    -- 例子
+    -- 下面 SQL 中的 ORDER BY 子句显得画蛇添足，因为子查询结果集里的值排序不怎么重要
+    SELECT * FROM t1 WHERE m1 IN (SELECT m2 FROM t2 ORDER BY m2);
+    ```
+
+  * `DISTINCT`语句 。
+
+    ```mysql
+    -- 例子
+    -- 子查询结果集是否去重对下面的 SQL 不重要
+    SELECT * FROM t1 WHERE m1 IN (SELECT DISTINCT m2 FROM t2);
+    ```
+
+  * 没有聚集函数以及`HAVING`子句的`GROUP BY`子句。
+
+    ```mysql
+    -- 例子
+    -- 没有聚集函数以及 HAVING 子句，GROUP BY 子句就是个摆设
+    SELECT * FROM t1 WHERE m1 IN (SELECT m2 FROM t2 GROUP BY m2);
+    ```
+
+  对于这些冗余的语句，查询优化器在一开始就会把它们给干掉。
+
+* 不允许在一条语句中增删改某个表的记录时，同时还对该表进行子查询。
+
+  ```mysql
+  -- 例子：非法子查询
+  DELETE FROM t1 WHERE m1 < (SELECT MAX(m1) FROM t1);
+  ```
+
+<br />
+
+### 子查询在 MySQL 中是怎么执行的
+
+---
+
+假设存在两个表 s1 和 s2 ，他们的表结构相同，各有 10000 条记录，除 id 列外其余的列用随机值填充。表结构如下：
+
+```mysql
+CREATE TABLE single_table (
+    id INT NOT NULL AUTO_INCREMENT,
+    key1 VARCHAR(100),
+    key2 INT,
+    key3 VARCHAR(100),
+    key_part1 VARCHAR(100),
+    key_part2 VARCHAR(100),
+    key_part3 VARCHAR(100),
+    common_field VARCHAR(100),
+    PRIMARY KEY (id),
+    KEY idx_key1 (key1),
+    UNIQUE KEY idx_key2 (key2),
+    KEY idx_key3 (key3),
+    KEY idx_key_part(key_part1, key_part2, key_part3)
+) Engine=InnoDB CHARSET=utf8;
+```
+
+下面介绍的 MySQL 如何优化子查询执行方式的方式，都是基于 MySQL5.7 这个版本讲解的。
+
+<br />
+
+#### 标量子查询、行子查询的执行方式
+
+---
+
+以下两种场景经常使用到标量子查询或者行子查询：
+
+* 在 SELECT 子句中的子查询必须是标量子查询。
+* 子查询使用`=`、`>`、`<`、`>=`、`<=`、`<>`、`!=`、`<=>`等操作符和某个操作数组成一个布尔表达式，这样的子查询必须是标量子查询或者行子查询。
+
+对于以上两种情况，**不相关标量子查询或行子查询**，他们的执行方式是简单的，例如：
+
+```mysql
+SELECT * FROM s1 
+WHERE key1 = (SELECT common_field FROM s2 WHERE key3 = 'a' LIMIT 1);
+```
+
+执行过程如下：
+
+* 先单独执行`(SELECT common_field FROM s2 WHERE key3 = 'a' LIMIT 1)`子查询。
+* 将上一步子查询得到的结果当作外层查询的参数再执行外层查询`SELECT * FROM s1 WHERE key1 = ...`。
+
+即对于包含**不相关的标量子查询或行子查询**的查询语句来说，MySQL 会分别独立的执行外层查询和子查询，相当于进行两个单表查询。
+
+对于以上两种情况，**相关的标量子查询或行子查询**，他们的执行方式也是简单的，例如：
+
+```mysql
+SELECT * FROM s1 
+WHERE key1 = (SELECT common_field FROM s2 WHERE s1.key3 = s2.key3 LIMIT 1);
+```
+
+执行过程如下：
+
+* 先从外层查询中获取一条记录，即先从 s1 表中获取一条记录。
+* 从上一步中获取的那条记录中找出子查询中涉及到的值，即从 s1 表中获取的那条记录中找出`s1.key3`列的值，然后执行子查询。
+* 最后根据子查询的查询结果来检测外层查询 WHERE 子句的条件是否成立，如果成立，就把外层查询的那条记录加入到结果集，否则丢弃。
+* 再次执行第一步，获取第二条外层查询中的记录，依次类推。
+
+<br />
+
+#### IN 子查询的优化
+
+---
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
