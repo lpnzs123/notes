@@ -469,11 +469,116 @@ MySQL 解决这个问题的方案是：**不直接将不相关子查询的结果
 
 <br />
 
+#### 物化表转连接
 
+---
 
+对于查询语句：
 
+```mysql
+SELECT * FROM s1 
+WHERE key1 IN (SELECT common_field FROM s2 WHERE key3 = 'a');
+```
 
+假设将子查询进行物化后，子查询物化表的名称为 materialized_table ，该物化表存储的子查询结果集的列为 m_val ，那么，我们可以从两个不同的角度看待上述查询。
 
+* 从表 s1 的角度，即对表 s1 的每条记录，若该记录的 key1 列的值在表 materialized_table 中，那么该记录会被加入最终的结果集。
+* 从表 materialized_table 的角度，即对于表 materialized_table 的每个值，若能在 s1 表中找到对应的 key1 列的值与该值相等的记录，则将对应记录加入到最终的结果集中。
+
+将上述两种角度整合，不就是表 s1 和表 materialized_table 的内连接吗？即查询语句等价于下面的 SQL 语句：
+
+```mysql
+SELECT s1.* FROM s1 INNER JOIN materialized_table ON key1 = m_val;
+```
+
+这样的话，查询优化器就可以评估不同连接顺序需要的成本，从而选取成本最低的那种查询方式执行查询了，我们简单分析以下吧。
+
+* 表 s1 为驱动表，查询成本由以下几个部分组成：
+  * 物化子查询时需要的成本。
+  * 扫描表 s1 的成本。
+  * 表 s1 中记录的数量 * 通过`m_val = xxx`对表 materialized_table 进行单表访问的成本（这里`m_val = xxx`中的 xxx 即表 s1 中每条记录的 key1 列的值，其次因为物化表中记录不重复且物化表中的列被建立的索引，这个步骤是非常快的）。
+* 表 materialized_table 为驱动表，查询成本由以下几个部分组成：
+  * 物化子查询时需要的成本。
+  * 扫描物化表时的成本
+  * 物化表中的记录数量 * 通过`key1 = xxx`对表 s1 进行单表访问的成本（这里`key1 = xxx`中的 xxx 即表 materialized_table 中每条记录的 m_val 列的值，其次因为表 s1 的 key1 列上存在索引，所以这个步骤也是非常快的）。
+
+MySQL 查询优化器会通过运算来选择上述成本更低的方案来执行查询。
+
+<br />
+
+#### 将子查询转换为 semi-join
+
+---
+
+不进行物化操作直接把子查询转换为连接查询是否可行呢？
+
+我们来一步一步的分析一下，下面两个查询是十分相似的：
+
+```mysql
+-- 查询 1
+SELECT * FROM s1 
+WHERE key1 IN (SELECT common_field FROM s2 WHERE key3 = 'a');
+
+-- 查询 2
+SELECT s1.* FROM s1 
+INNER JOIN s2 ON s1.key1 = s2.common_field 
+WHERE s2.key3 = 'a';
+```
+
+我们这样理解查询 1 ，对于表 s1 的某条记录，若我们能在表 s2（准确的说是执行完`WHERE s2.key3 = 'a'`之后的结果集）中找到一条或多条记录，这些记录的 common_field 列的值等于表 s1 记录的 key1 列的值，那么该条表 s1 的记录就会被加入到最终的结果集（欸，这不和查询 2 很像吗）。
+
+从上述理解入手，查询 1 和查询 2 不相似的地方在于，我们不能保证对于表 s1 的某条记录，表 s2 之中有多少条记录满足`s1.key1 = s2.common_field`这个条件。也就是说，我们不能保证 s1 表中的记录在查询 2 中不会被多次的加入到结果集中 。
+
+如何解决查询 1 和查询 2 的差异，从而使得子查询可以被转换为连接查询呢？
+
+MySQL 提出了一个新的概念，**半连接（英文：semi-join）**。半连接的意思就是，对于表 s1 的某条记录来说，我们只关心在表 s2 中是否存在与之匹配的记录，而不关心具体有多少条记录与之匹配，最终的结果集中只保留表 s1 的记录。
+
+也就是说 MySQL 会将查询 2 看作下面的这句 SQL ，我们姑且称其为查询 3 吧。
+
+```mysql
+-- 查询 3
+-- semi-join只是在 MySQL 内部采用的一种执行子查询的方式，不面向用户
+SELECT s1.* FROM s1 
+SEMI JOIN s2 ON s1.key1 = s2.common_field
+WHERE key3 = 'a';
+```
+
+这只是抽象的东西，半连接的具体实现方式有以下几种：
+
+* **Table Pullout（子查询中的表上拉）**。即当子查询的查询列表处只有主键或者唯一索引列时，可以直接把子查询中的表上拉到外层查询的 FROM 子句中，并把子查询中的搜索条件合并到外层查询的搜索条件中。例如：
+
+  ```mysql
+  -- 查询语句执行 Table Pullout
+  -- 执行前（注意 key2 列是表 s2 的唯一二级索引列）
+  SELECT * FROM s1 
+  WHERE key2 IN (SELECT key2 FROM s2 WHERE key3 = 'a');
+  
+  -- 执行后
+  SELECT s1.* FROM s1 
+  INNER JOIN s2 ON s1.key2 = s2.key2 
+  WHERE s2.key3 = 'a';
+  ```
+
+  为什么可以这样做？因为对于同一条表 s1 中的记录，不可能找到两条以上符合`s1.key2 = s2.key2`的记录。
+
+* **DuplicateWeedout Execution Strategy （重复值消除）**。即建立临时表，消除重复值。例如：
+
+  ```mysql
+  -- 查询语句
+  SELECT * FROM s1 
+  WHERE key1 IN (SELECT common_field FROM s2 WHERE key3 = 'a');
+  
+  -- 对查询语句建立临时表
+  CREATE TABLE tmp (
+      id PRIMARY KEY
+  );
+  ```
+
+  在执行连接查询的过程中，每当某条表 s1 中的记录要加入结果集时，就把这条记录的 id 值加入到上述的临时表中。若添加成功，则表明这条表 s1 中的记录未曾加入到最终的结果集中，那么该记录就可以添加到最终的结果集中；若添加失败，则表明这条表 s1 中的记录加入到最终的结果集中过，直接丢弃这条记录即可。
+
+  这种使用临时表消除 semi-join 结果集中的重复值的方式称之为 **DuplicateWeedout** 。
+
+* **LooseScan Execution Strategy （松散索引扫描）**。
 
 
 
