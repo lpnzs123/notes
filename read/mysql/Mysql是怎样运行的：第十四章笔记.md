@@ -594,7 +594,8 @@ WHERE key1 IN (SELECT common_field FROM s2 WHERE s1.key3 = s2.key3);
 -- 将查询 4 转换成半连接查询，即查询 5 
 
 -- 查询 5 
--- 我们可以对查询 5 使用 DuplicateWeedout、LooseScan、FirstMatch 等半连接执行策略来执行查询，当子查询的查询列表处只有主键或者唯一二级索引列时，还可以直接使用 Table Pullout 的策略来执行查询。但是要注意，由于查询 4 的子查询是相关子查询，所以不能转换为物化表来执行查询。
+-- 我们可以对查询 5 使用 DuplicateWeedout、LooseScan、FirstMatch 等半连接执行策略来执行查询，当子查询的查询列表处只有主键或者唯一二级索引列时，还可以直接使用 Table Pullout 的策略来执行查询。
+-- 注意，由于查询 4 的子查询是相关子查询，所以不能转换为物化表来执行查询。
 SELECT s1.* FROM s1 
 SEMI JOIN s2 ON s1.key1 = s2.common_field AND s1.key3 = s2.key3;
 ```
