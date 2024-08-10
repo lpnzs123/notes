@@ -174,7 +174,7 @@ CREATE TABLE t2 (
 * FROM 子句中。
 
   ```mysql
-  -- 子查询结果集组成的表称之为派生表，下面的 t 表便是派生表
+  -- 放在 FROM 子句中的子查询，其结果集组成的表称之为派生表，下面的 t 表便是派生表
   SELECT m, n FROM (SELECT m2 + 1 AS m, n2 AS n FROM t2 WHERE m2 > 2) AS t;
   ```
 
@@ -416,15 +416,18 @@ WHERE key1 = (SELECT common_field FROM s2 WHERE key3 = 'a' LIMIT 1);
 
 ```mysql
 SELECT * FROM s1 
-WHERE key1 = (SELECT common_field FROM s2 WHERE s1.key3 = s2.key3 LIMIT 1);
+WHERE key1 = (
+    SELECT common_field FROM s2 
+    WHERE s1.key3 = s2.key3 LIMIT 1
+);
 ```
 
 执行过程如下：
 
-* 先从外层查询中获取一条记录，即先从 s1 表中获取一条记录。
-* 从上一步中获取的那条记录中找出子查询中涉及到的值，即从 s1 表中获取的那条记录中找出`s1.key3`列的值，然后执行子查询。
-* 最后根据子查询的查询结果来检测外层查询 WHERE 子句的条件是否成立，如果成立，就把外层查询的那条记录加入到结果集，否则丢弃。
-* 再次执行第一步，获取第二条外层查询中的记录，依次类推。
+1. 先从外层查询中获取一条记录，即先从 s1 表中获取一条记录。
+2. 从上一步中获取的那条记录中找出子查询中涉及到的值，即从 s1 表中获取的那条记录中找出`s1.key3`列的值，然后执行子查询。
+3. 最后根据子查询的查询结果来检测外层查询 WHERE 子句的条件是否成立，如果成立，就把外层查询的那条记录加入到结果集，否则丢弃。
+4. 再次执行第一步，获取第二条外层查询中的记录，依次类推。
 
 <br />
 
@@ -733,6 +736,153 @@ IN 子查询的优化过程如下：
 ## ANY / ALL 子查询优化
 
 ---
+
+若 ANY / ALL 子查询是不相关子查询，那么他们能做如下转换：
+
+|           原始表达式           |         转换后的表达式          |
+| :----------------------------: | :-----------------------------: |
+| < ANY (SELECT inner_expr ...)  | < (SELECT MAX(inner_expr) ...)  |
+| \> ANY (SELECT inner_expr ...) | \> (SELECT MIN(inner_expr) ...) |
+| < ALL (SELECT inner_expr ...)  | < (SELECT MIN(inner_expr) ...)  |
+| \> ALL (SELECT inner_expr ...) | \> (SELECT MAX(inner_expr) ...) |
+
+<br />
+
+## [NOT] EXISTS 子查询的执行
+
+---
+
+若 [NOT] EXISTS 子查询是不相关子查询，则执行过程如下：
+
+1. 先执行子查询，得出 [NOT] EXISTS 子查询的结果是 TRUE 还是 FALSE 。
+2. 重写原先的查询语句。
+
+举个例子：
+
+```mysql
+-- 例子
+SELECT * FROM s1 
+WHERE EXISTS (
+    SELECT 1 FROM s2 
+    WHERE key1 = 'a'
+) 
+OR key2 > 100;
+
+-- 假设子查询结果为 TRUE，则上述查询语句可以写成下面这样
+SELECT * FROM s1 
+WHERE TRUE OR key2 > 100;
+
+-- 再次化简得
+SELECT * FROM s1 
+```
+
+若 [NOT] EXISTS 子查询是相关子查询，例如：
+
+```mysql
+SELECT * FROM s1 
+WHERE EXISTS (
+    SELECT 1 FROM s2 
+    WHERE s1.common_field = s2.common_field
+);
+
+```
+
+则执行过程如下：
+
+1. 先从外层查询中获取一条记录，即先从 s1 表中获取一条记录。
+2. 从上一步中获取的那条记录中找出子查询中涉及到的值，即从 s1 表中获取的那条记录中找出`s1.common_field`列的值，然后执行子查询。
+3. 最后根据子查询的查询结果来检测外层查询 WHERE 子句的条件是否成立，如果成立，就把外层查询的那条记录加入到结果集，否则丢弃。
+4. 再次执行第一步，获取第二条外层查询中的记录，依次类推。
+
+这个过程若可以使用到索引，那查询速度会加快不少，例如：
+
+```mysql
+-- EXISTS 子查询中可以使用 idx_key1 索引来加快查询速度
+SELECT * FROM s1 
+WHERE EXISTS (
+    SELECT 1 FROM s2 
+    WHERE s2.key1 = s1.common_field
+);
+```
+
+<br />
+
+## 对于派生表的优化
+
+---
+
+我们首先来回忆以下派生表的概念，即放在 FROM 子句中的子查询，其结果集组成的表称之为**派生表**。例如：
+
+```mysql
+-- 下面的 t 表便是派生表
+SELECT m, n FROM (
+    SELECT m2 + 1 AS m, n2 AS n 
+    FROM t2 
+    WHERE m2 > 2
+) AS t;
+```
+
+对含有派生表的查询，MySQL 提供了两种执行策略：
+
+* 把派生表物化。即将派生表的结果集写到一个内部的临时表中，然后将这个物化表当作普通表参与查询。
+
+  需要注意的是，这里对派生表进行物化时，MySQL 使用了一种称为**延迟物化**的策略，也就是在查询中真正使用到派生表时，才会去尝试物化派生表，而不是还没开始执行查询就把派生表物化。例如：
+
+  ```mysql
+  -- 该查询执行时首先会到表 s2 中找出满足条件 s2.key2 = 1 的记录
+  -- 若表 s2 中没有满足条件的记录，则说明参与连接的表 s2 记录就是空的，所以整个查询的结果集就是空的，这时候也没有必要去物化查询中的派生表了。
+  SELECT * FROM (
+  	SELECT * FROM s1 
+  	WHERE key1 = 'a'
+  ) AS derived_s1 
+  INNER JOIN s2 ON derived_s1.key1 = s2.key1
+  WHERE s2.key2 = 1;
+  ```
+
+* 将派生表和外层查询合并。即将派生表与外层查询的表合并，然后将派生表中的搜索条件放到外层查询的搜索条件中，例如：
+
+  ```mysql
+  -- 例1
+  -- 合并前
+  SELECT * FROM (
+      SELECT * FROM s1 
+      WHERE key1 = 'a'
+  ) AS derived_s1;
+  
+  -- 合并后
+  SELECT * FROM s1 
+  WHERE key1 = 'a';
+  
+  -- 例2
+  -- 合并前
+  SELECT * FROM (
+  	SELECT * FROM s1 
+  	WHERE key1 = 'a'
+  ) AS derived_s1 
+  INNER JOIN s2 ON derived_s1.key1 = s2.key1
+  WHERE s2.key2 = 1;
+  
+  -- 合并后
+  SELECT * FROM s1 
+  INNER JOIN s2 ON s1.key1 = s2.key1
+  WHERE s1.key1 = 'a' 
+  AND s2.key2 = 1;
+  ```
+
+  成功的合并派生表和外层查询，消除了派生表，这意味着，我们没有必要再付出创建和访问临时表的成本。但不是所有带派生表的查询都能被成功的和外层查询合并，当派生表中有这些语句就不可以和外层查询合并：
+
+  * 聚集函数
+  * DISTINCT
+  * GROUP BY
+  * HAVING
+  * LIMIT
+  * UNION 或 UNION ALL
+  * 派生表对应子查询的 SELECT 子句中含有另一个子查询
+  * 还有些不常用的情况，不再细说
+
+MySQL 在执行带有派生表的查询的时候，会优先尝试把派生表和外层查询合并来执行查询；若不能合并，才会把派生表物化来执行查询。
+
+
 
 
 
