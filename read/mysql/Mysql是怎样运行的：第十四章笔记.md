@@ -605,7 +605,133 @@ SEMI JOIN s2 ON s1.key1 = s2.common_field AND s1.key3 = s2.key3;
 
 ---
 
+包含 IN 子查询的查询语句转换为 semi-join，需要满足以下条件：
 
+* 该子查询必须是和 IN 语句组成的布尔表达式，并且在外层查询的 WHERE 或者 ON 子句中出现。
+* 外层查询可以有其他搜索条件，只不过和 IN 子查询的搜索条件必须使用 AND 关键字连接起来。
+* 该子查询必须是一个单一的查询，不能是由若干查询由 UNION 连接起来的形式。
+* 该子查询不能包含 GROUP BY 或 HAVING 语句 或 聚集函数。
+* 还有一些条件比较少见，不再介绍。
+
+<br />
+
+#### 不适用于 semi-join 的情况
+
+---
+
+子查询无法转为 semi-join 的情况，典型的有以下几种：
+
+* 外层查询的 WHERE 条件中有其他搜索条件与 IN 子查询组成的布尔表达式使用 OR 连接起来。
+
+* 对子查询使用 NOT IN 关键字而不是 IN 关键字的情况。
+
+* 在 SELECT 子句中对子查询使用 IN 关键字的情况。
+
+  ```mysql
+  -- 例子
+  SELECT key1 IN (SELECT common_field FROM s2 WHERE key3 = 'a') FROM s1 ;
+  ```
+
+* 子查询中包含 GROUP BY 、 HAVING 关键字或 聚集函数的情况。
+
+* 子查询中包含 UNION 关键字的情况。
+
+但是对于不能转为 semi-join 查询的子查询，MySQL 仍能对其优化：
+
+* **对于不相关的子查询**，可以尝试将其物化后再参与查询。
+
+  ```mysql
+  -- 例子
+  SELECT * FROM s1 
+  WHERE key1 NOT IN (SELECT common_field FROM s2 WHERE key3 = 'a')
+  ```
+
+  我们可以对上例中的子查询进行物化操作，再判断 key1 是否在物化表的结果集中。但是这里将子查询物化之后不能转为和外层查询表的连接（因为查询语句对子查询使用 NOT IN 关键字），只能是先扫描表 s1，然后对表 s1 的某条记录来说，判断该记录的 key1 值是否在物化表中。
+
+* 无论子查询的相关与否，都可以把 IN 子查询**尝试**转为 EXISTS 子查询。
+
+  其实对于任何一个 IN 子查询而言，都可以被转为 EXISTS 子查询。但是对于这个转换，是有特殊情况的，因为 NULL 值的存在，而 NULL 值作为操作数的表达式结果往往为 NULL 。这就会导致对子查询使用 IN 关键字还是 EXISTS 关键字，会有一定的区别。
+
+  ```mysql
+  -- 查询返回 NULL
+  SELECT NULL IN (1, 2, 3);
+  
+  -- 查询返回 1（TRUE） / 0（FALSE）
+  -- 实际测试下来应该是返回 1（TRUE） / NULL（FALSE）
+  SELECT EXISTS (SELECT 1 FROM s1 WHERE NULL = 1);
+  ```
+
+  但是在 WHERE  或者 ON 子句中是不区分 NULL 和 FALSE 的。
+
+  ```mysql
+  -- 查询语句
+  mysql> SELECT 1 FROM s1 WHERE NULL;
+  -- 查询结果
+  Empty set (0.00 sec)
+  
+  -- 查询语句
+  mysql> SELECT 1 FROM s1 WHERE FALSE;
+  -- 查询结果
+  Empty set (0.00 sec)
+  ```
+
+  也就是说只要我们的 IN 子查询是放在 WHERE 或 ON 子句中，IN 子查询到 EXISTS 子查询的转换，就是没有问题的。
+
+  为何要将 IN 子查询转换为 EXISTS 子查询呢？
+
+  因为不转换可能用不到索引。例如：
+  
+  ```mysql
+  -- 例子
+  -- 该查询为相关子查询，且其子查询无法使用到索引，因为 common_field 字段没有索引
+  SELECT * FROM s1
+  WHERE key1 IN (
+      SELECT key3 FROM s2
+      WHERE s1.common_field = s2.common_field
+  ) 
+  OR key2 > 1000;
+  
+  -- 将例子转换为 EXISTS 子查询如下
+  -- 该查询的子查询可以使用到表 s2 的 idx_key3 索引
+  SELECT * FROM s1
+  WHERE EXISTS (
+      SELECT 1 FROM s2 
+      WHERE s1.common_field = s2.common_field 
+      AND s2.key3 = s1.key1
+  ) 
+  OR key2 > 1000;
+  ```
+  
+  **注意：若 IN 子查询不满足转换为 semi-join 的条件，又不能转换为物化表 或 转换为物化表的成本太大。那么该子查询就会被转换为 EXISTS 子查询，且在 MySQL5.5 以及之前的版本没有引进 semi-join 和物化的方式优化子查询，在 MySQL5.5 以及之前的版本优化器都会把 IN 子查询转换为 EXISTS 子查询。**
+
+<br />
+
+#### 小结
+
+---
+
+IN 子查询的优化过程如下：
+
+* 若 IN 子查询符合转换为 semi-join 的条件，查询优化器会优先把该 IN 子查询转换为 semi-join ，然后再考虑下面 5 种执行半连接的策略中，哪个成本最低：
+
+  * Table pullout（子查询中的表上拉）
+  * DuplicateWeedout（重复值消除）
+  * LooseScan（松散索引扫描）
+  * Materialization（物化）
+  * FirstMatch（首次匹配）
+
+  然后选择成本最低的那种执行策略来执行 IN 子查询。
+
+* 若 IN 子查询不符合转换为 semi-join 的条件，那么查询优化器会从下面的两种策略中，找出一种成本更低的方式执行子查询：
+
+  * 将 IN 子查询物化之后再执行查询。
+  * 将 IN 子查询转换为 EXISTS 子查询。
+
+<br />
+
+## ANY / ALL 子查询优化
+
+---
 
 
 
