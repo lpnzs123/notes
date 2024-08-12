@@ -128,6 +128,22 @@ EXPLAIN 语句结果集中第三条记录 id 值为 NULL ，这是因为 UNION �
 
 
 
+<br />
+
+### partitions
+
+---
+
+
+
+
+
+
+
+
+
+
+
 
 
 
