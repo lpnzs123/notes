@@ -118,15 +118,130 @@ EXPLAIN 语句结果集中第三条记录 id 值为 NULL ，这是因为 UNION �
 
 ---
 
+我们来介绍一下 select_type 字段可以取到的值以及其含义。
 
+* SIMPLE：查询语句中**不包含 UNION 关键字或子查询**，这样的查询都算作是 SIMPLE 类型。
 
+* PRIMARY：对于包含 UNION 或 UNION ALL 或  子查询的大查询，他是由几个小查询组成的，最左边的的那个查询（即执行计划的第一条记录）的 select_type 的值就为 PRIMARY 。
 
+* UNION：对于包含 UNION 或 UNION ALL 或  子查询的大查询，他是由几个小查询组成的，除了最左边的那个小查询（即除了执行计划的第一条记录）以外，其余小查询的 select_type 值就是 UNION 。
 
+* UNION RESULT：UNION 关键字是会对查询的结果集去重的，**MySQL 选择了使用临时表来完成 UNION 查询的去重工作**，针对该临时表的小查询对应执行计划记录的 select_type 值就是 UNION RESULT。
 
+  ```mysql
+  --  查询语句
+  EXPLAIN SELECT * FROM s1 UNION SELECT * FROM s2;
+  
+  -- 查询结果
+  -- <union1,2> 就是临时表，其 select_type 的值为 UNION RESULT
+  +----+--------------+------------+------------+------+---------------+------+---------+------+------+----------+-----------------+
+  | id | select_type  | table      | partitions | type | possible_keys | key  | key_len | ref  | rows | filtered | Extra           |
+  +----+--------------+------------+------------+------+---------------+------+---------+------+------+----------+-----------------+
+  |  1 | PRIMARY      | s1         | NULL       | ALL  | NULL          | NULL | NULL    | NULL | 9688 |   100.00 | NULL            |
+  |  2 | UNION        | s2         | NULL       | ALL  | NULL          | NULL | NULL    | NULL | 9954 |   100.00 | NULL            |
+  |NULL| UNION RESULT | <union1,2> | NULL       | ALL  | NULL          | NULL | NULL    | NULL | NULL |     NULL | Using temporary |
+  +----+--------------+------------+------------+------+---------------+------+---------+------+------+----------+-----------------+
+  ```
 
+* SUBQUERY：若包含子查询的查询语句不能转换为对应 semi-join 的形式，且该子查询是不相关子查询，同时，查询优化器决定采用将该子查询物化的方案来执行该子查询，这时，该子查询的第一个 SELECT 关键字代表的查询，其 select_type 的值就为 SUBQUERY 。例如：
 
+  ```mysql
+  -- 查询语句
+  -- 该查询语句外层查询的 WHERE 条件中有其他搜索条件与 IN 子查询组成的布尔表达式使用 OR 连接起来，说明其子查询无法转为 semi-join 
+  -- 明显的，该子查询是不相关子查询
+  EXPLAIN SELECT * FROM s1 WHERE key1 IN (SELECT key1 FROM s2) OR key3 = 'a';
+  
+  -- 查询结果
+  -- 可以看到，查询语句子查询的 select_type 是 SUBQUERY
+  -- 由于 select_type 为 SUBQUERY 的子查询会被物化，所以其只需要执行一遍
+  +----+-------------+-------+------------+-------+---------------+----------+---------+------+------+----------+-------------+
+  | id | select_type | table | partitions | type  | possible_keys | key      | key_len | ref  | rows | filtered | Extra       |
+  +----+-------------+-------+------------+-------+---------------+----------+---------+------+------+----------+-------------+
+  |  1 | PRIMARY     | s1    | NULL       | ALL   | idx_key3      | NULL     | NULL    | NULL | 9688 |   100.00 | Using where |
+  |  2 | SUBQUERY    | s2    | NULL       | index | idx_key1      | idx_key1 | 303     | NULL | 9954 |   100.00 | Using index |
+  +----+-------------+-------+------------+-------+---------------+----------+---------+------+------+----------+-------------+
+  
+  ```
+  
+* DEPENDENT SUBQUERY：若包含子查询的查询语句不能转换为对应 semi-join 的形式，且该子查询是相关子查询，则该子查询的第一个 SELECT 关键字代表的查询，其 select_type 的值就是 DEPENDENT SUBQUERY 。例如：
 
+  ```mysql
+  -- 查询语句
+  -- 该查询语句外层查询的 WHERE 条件中有其他搜索条件与 IN 子查询组成的布尔表达式使用 OR 连接起来，说明其子查询无法转为 semi-join 
+  -- 明显的，该子查询是相关子查询
+  EXPLAIN SELECT * FROM s1 WHERE key1 IN (SELECT key1 FROM s2 WHERE s1.key2 = s2.key2) OR key3 = 'a';
+  
+  -- 查询结果
+  -- 可以看到，查询语句子查询的第一个 SELECT 关键字代表的查询，其 select_type 的值是 DEPENDENT SUBQUERY
+  +----+--------------------+-------+------------+------+---------------+----------+---------+--- -+------+----------+-------------+
+  | id |    select_type     | table | partitions | type | possible_keys | key      | key_len | ref | rows | filtered | Extra       |
+  +----+--------------------+-------+------------+------+---------------+----------+---------+--- -+------+----------+-------------+
+  |  1 | PRIMARY            | s1    | NULL       | ALL  | idx_key3      | NULL     | NULL    |NULL | 9688 |   100.00 | Using where |
+  |  2 | DEPENDENT SUBQUERY | s2    | NULL       | ref  | ...           | idx_key2 | 5       |...  |  1   |   10.00  | Using where |
+  +----+--------------------+-------+------------+------+---------------+----------+---------+-----+-----+----------+--------------+
+  ```
 
+  **注意：select_type 为 DEPENDENT SUBQUERY 的查询可能会被执行多次。**
+
+* DEPENDENT UNION：在包含 UNION 或 UNION ALL 的大查询中，若各个小查询都依赖于外层查询，则除了最左边的那个小查询，其余的小查询的 select_type 值为 DEPENDENT UNION 。例如：
+
+  ```mysql
+  -- 查询语句
+  EXPLAIN SELECT * FROM s1 WHERE key1 IN (SELECT key1 FROM s2 WHERE key1 = 'a' UNION SELECT key1 FROM s1 WHERE key1 = 'b');
+  
+  -- 查询结果
+  +----+--------------------+----------+------------+------+---------------+----------+---------+--- -+------+----------+-------------+
+  | id |    select_type     | table    | partitions | type | possible_keys | key      | key_len | ref | rows | filtered | Extra       |
+  +----+--------------------+----------+------------+------+---------------+----------+---------+--- -+------+----------+-------------+
+  |  1 | PRIMARY            | s1       | NULL       | ALL  | NULL          | NULL     | NULL    |NULL | 9688 |   100.00 | Using where |
+  |  2 | DEPENDENT SUBQUERY | s2       | NULL       | ref  | idx_key1      | idx_key1 | 303     |const|   12 |   100.00 | ...         |
+  |  3 | DEPENDENT UNION    | s1       | NULL       | ref  | idx_key1      | idx_key1 | 303     |const|    8 |   100.00 | ...         |
+  |NULL| UNION RESULT       |<union2,3>| NULL       | ALL  | NULL          | NULL     | NULL    |NULL | NULL |     NULL | ...         |
+  +----+--------------------+----------+------------+------+---------------+----------+---------+--- -+------+----------+-------------+
+  ```
+
+  这里我不建议用原因推结果，而是建议结果推原因，因为查询语句的子查询怎么看都不像是相关子查询。我们这时候根据查询结果反推，有结论：MySQL认为查询语句的子查询，其中的两个小查询都是相关子查询（我也不知道MySQL为什么这么认为）。
+
+  这样，就能解释查询`SELECT key1 FROM s2 WHERE key1 = 'a'`的 select_type 值为什么为 DEPENDENT SUBQUERY ，而查询`SELECT key1 FROM s1 WHERE key1 = 'b'`的 select_type 值为什么为 DEPENDENT UNION 了。
+
+* DERIVED： 对于采用物化方式执行的，包含派生表的查询，该派生表对应查询的 select_type 的值就是 DERIVED 。例如：
+
+  ```mysql
+  -- 查询语句
+  EXPLAIN SELECT * FROM (SELECT key1, count(*) as c FROM s1 GROUP BY key1) AS derived_s1 where c > 1;
+  
+  -- 查询结果
+  +----+-------------+------------+------------+-------+---------------+----------+---------+------+------+----------+-------------+
+  | id | select_type | table      | partitions | type  | possible_keys | key      | key_len | ref  | rows | filtered | Extra       |
+  +----+-------------+------------+------------+-------+---------------+----------+---------+------+------+----------+-------------+
+  |  1 | PRIMARY     | <derived2> | NULL       | ALL   | NULL          | NULL     | NULL    | NULL | 9688 |    33.33 | Using where |
+  |  2 | DERIVED     | s1         | NULL       | index | idx_key1      | idx_key1 | 303     | NULL | 9688 |   100.00 | Using index |
+  +----+-------------+------------+------------+-------+---------------+----------+---------+------+------+----------+-------------+
+  ```
+
+  **注意到，id 为 1 的记录代表的外层查询，它的 table 列显示的是 <derived2>，表明该查询是针对将派生表物化之后的表进行查询的。**若派生表可以通过和外层查询合并的方式执行，执行计划会与上述查询结果大有不同。
+
+* MATERIALIZED：查询优化器在执行包含子查询的语句时，若选择将子查询物化之后与外层查询进行连接查询，该子查询对应的 select_type 的值就是 MATERIALIZED 。例如：
+
+  ```mysql
+  -- 查询语句
+  EXPLAIN SELECT * FROM s1 WHERE key1 IN (SELECT key1 FROM s2);
+  
+  -- 查询结果
+  +----+-------------+------------+------------+-------+---------------+----------+---------+------+------+----------+-------------+
+  | id | select_type | table      | partitions | type  | possible_keys | key      | key_len | ref  | rows | filtered | Extra       |
+  +----+-------------+------------+------------+-------+---------------+----------+---------+------+------+----------+-------------+
+  |  1 |SIMPLE       |s1          | NULL       |ALL    | idx_key1      | NULL     | NULL    | NULL | 9688 |   100.00 | Using where |
+  |  1 |SIMPLE       |<subquery2> | NULL       |eq_ref | <auto_key>    | ...      | 303     | ...  |    1 |   100.00 | NULL        |
+  |  2 |MATERIALIZED |s2          | NULL       |index  | idx_key1      | idx_key1 | 303     | NULL | 9954 |   100.00 | Using index |
+  +----+-------------+------------+------------+-------+---------------+----------+---------+------+------+----------+-------------+
+  ```
+
+  id 为 2 对应的子查询执行物化后产生的物化表对应的记录就是 table 列值为 <subquery2> 的记录。第一条记录和第二条记录的 id 值是一样的，表明其对应的两个表进行了连接查询。
+
+* UNCACHEABLE SUBQUERY：不常用，不多介绍。
+
+* UNCACHEABLE UNION：不常用，不多介绍。
 
 <br />
 
