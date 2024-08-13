@@ -94,7 +94,7 @@ CREATE TABLE single_table (
 -- EXPLAIN 语句
 EXPLAIN SELECT * FROM s1  UNION SELECT * FROM s2;
 
--- EXPLAIN 语句结果集
+-- EXPLAIN 语句结果集（即执行计划）
 +----+-------------+----------+------------+------+---------------+-----+---------+-----+------+----------+-----------------+
 | id | select_type | table    | partitions | type | possible_keys | key | key_len | ref | rows | filtered | Extra           |
 +----+-------------+----------+------------+------+---------------+-----+---------+-----+------+----------+-----------------+
@@ -122,17 +122,17 @@ EXPLAIN 语句结果集中第三条记录 id 值为 NULL ，这是因为 UNION �
 
 * SIMPLE：查询语句中**不包含 UNION 关键字或子查询**，这样的查询都算作是 SIMPLE 类型。
 
-* PRIMARY：对于包含 UNION 或 UNION ALL 或  子查询的大查询，他是由几个小查询组成的，最左边的的那个查询（即执行计划的第一条记录）的 select_type 的值就为 PRIMARY 。
+* PRIMARY：对于包含 UNION 或 UNION ALL 或  子查询 的大查询，他是由几个小查询组成的，最左边的的那个查询（即执行计划的第一条记录）的 select_type 的值就为 PRIMARY 。
 
 * UNION：对于包含 UNION 或 UNION ALL 或  子查询的大查询，他是由几个小查询组成的，除了最左边的那个小查询（即除了执行计划的第一条记录）以外，其余小查询的 select_type 值就是 UNION 。
 
 * UNION RESULT：UNION 关键字是会对查询的结果集去重的，**MySQL 选择了使用临时表来完成 UNION 查询的去重工作**，针对该临时表的小查询对应执行计划记录的 select_type 值就是 UNION RESULT。
 
   ```mysql
-  --  查询语句
+  --  EXPLAIN 语句
   EXPLAIN SELECT * FROM s1 UNION SELECT * FROM s2;
   
-  -- 查询结果
+  -- 执行计划
   -- <union1,2> 就是临时表，其 select_type 的值为 UNION RESULT
   +----+--------------+------------+------------+------+---------------+------+---------+------+------+----------+-----------------+
   | id | select_type  | table      | partitions | type | possible_keys | key  | key_len | ref  | rows | filtered | Extra           |
@@ -146,12 +146,12 @@ EXPLAIN 语句结果集中第三条记录 id 值为 NULL ，这是因为 UNION �
 * SUBQUERY：若包含子查询的查询语句不能转换为对应 semi-join 的形式，且该子查询是不相关子查询，同时，查询优化器决定采用将该子查询物化的方案来执行该子查询，这时，该子查询的第一个 SELECT 关键字代表的查询，其 select_type 的值就为 SUBQUERY 。例如：
 
   ```mysql
-  -- 查询语句
+  -- EXPLAIN 语句
   -- 该查询语句外层查询的 WHERE 条件中有其他搜索条件与 IN 子查询组成的布尔表达式使用 OR 连接起来，说明其子查询无法转为 semi-join 
   -- 明显的，该子查询是不相关子查询
   EXPLAIN SELECT * FROM s1 WHERE key1 IN (SELECT key1 FROM s2) OR key3 = 'a';
   
-  -- 查询结果
+  -- 执行计划
   -- 可以看到，查询语句子查询的 select_type 是 SUBQUERY
   -- 由于 select_type 为 SUBQUERY 的子查询会被物化，所以其只需要执行一遍
   +----+-------------+-------+------------+-------+---------------+----------+---------+------+------+----------+-------------+
@@ -166,12 +166,12 @@ EXPLAIN 语句结果集中第三条记录 id 值为 NULL ，这是因为 UNION �
 * DEPENDENT SUBQUERY：若包含子查询的查询语句不能转换为对应 semi-join 的形式，且该子查询是相关子查询，则该子查询的第一个 SELECT 关键字代表的查询，其 select_type 的值就是 DEPENDENT SUBQUERY 。例如：
 
   ```mysql
-  -- 查询语句
+  -- EXPLAIN 语句
   -- 该查询语句外层查询的 WHERE 条件中有其他搜索条件与 IN 子查询组成的布尔表达式使用 OR 连接起来，说明其子查询无法转为 semi-join 
   -- 明显的，该子查询是相关子查询
   EXPLAIN SELECT * FROM s1 WHERE key1 IN (SELECT key1 FROM s2 WHERE s1.key2 = s2.key2) OR key3 = 'a';
   
-  -- 查询结果
+  -- 执行计划
   -- 可以看到，查询语句子查询的第一个 SELECT 关键字代表的查询，其 select_type 的值是 DEPENDENT SUBQUERY
   +----+--------------------+-------+------------+------+---------------+----------+---------+--- -+------+----------+-------------+
   | id |    select_type     | table | partitions | type | possible_keys | key      | key_len | ref | rows | filtered | Extra       |
@@ -186,10 +186,10 @@ EXPLAIN 语句结果集中第三条记录 id 值为 NULL ，这是因为 UNION �
 * DEPENDENT UNION：在包含 UNION 或 UNION ALL 的大查询中，若各个小查询都依赖于外层查询，则除了最左边的那个小查询，其余的小查询的 select_type 值为 DEPENDENT UNION 。例如：
 
   ```mysql
-  -- 查询语句
+  -- EXPLAIN 语句
   EXPLAIN SELECT * FROM s1 WHERE key1 IN (SELECT key1 FROM s2 WHERE key1 = 'a' UNION SELECT key1 FROM s1 WHERE key1 = 'b');
   
-  -- 查询结果
+  -- 执行计划
   +----+--------------------+----------+------------+------+---------------+----------+---------+--- -+------+----------+-------------+
   | id |    select_type     | table    | partitions | type | possible_keys | key      | key_len | ref | rows | filtered | Extra       |
   +----+--------------------+----------+------------+------+---------------+----------+---------+--- -+------+----------+-------------+
@@ -202,15 +202,15 @@ EXPLAIN 语句结果集中第三条记录 id 值为 NULL ，这是因为 UNION �
 
   这里我不建议用原因推结果，而是建议结果推原因，因为查询语句的子查询怎么看都不像是相关子查询。我们这时候根据查询结果反推，有结论：MySQL认为查询语句的子查询，其中的两个小查询都是相关子查询（我也不知道MySQL为什么这么认为）。
 
-  这样，就能解释查询`SELECT key1 FROM s2 WHERE key1 = 'a'`的 select_type 值为什么为 DEPENDENT SUBQUERY ，而查询`SELECT key1 FROM s1 WHERE key1 = 'b'`的 select_type 值为什么为 DEPENDENT UNION 了。
+  这样，就能解释查询`SELECT key1 FROM s2 WHERE key1 = 'a'`的 select_type 值为什么为 DEPENDENT SUBQUERY ，而查询`SELECT key1 FROM s1 WHERE key1 = 'b'`的 select_type 值为什么为 DEPENDENT UNION 了。同时，我们的思维也要更加灵活，不能局限于用定义证结果，我们也要能通过结果了解信息。
 
-* DERIVED： 对于采用物化方式执行的，包含派生表的查询，该派生表对应查询的 select_type 的值就是 DERIVED 。例如：
+* DERIVED：对于采用物化方式执行的，包含派生表的查询，该派生表对应查询的 select_type 的值就是 DERIVED 。例如：
 
   ```mysql
-  -- 查询语句
+  -- EXPLAIN 语句
   EXPLAIN SELECT * FROM (SELECT key1, count(*) as c FROM s1 GROUP BY key1) AS derived_s1 where c > 1;
   
-  -- 查询结果
+  -- 执行计划
   +----+-------------+------------+------------+-------+---------------+----------+---------+------+------+----------+-------------+
   | id | select_type | table      | partitions | type  | possible_keys | key      | key_len | ref  | rows | filtered | Extra       |
   +----+-------------+------------+------------+-------+---------------+----------+---------+------+------+----------+-------------+
@@ -224,10 +224,10 @@ EXPLAIN 语句结果集中第三条记录 id 值为 NULL ，这是因为 UNION �
 * MATERIALIZED：查询优化器在执行包含子查询的语句时，若选择将子查询物化之后与外层查询进行连接查询，该子查询对应的 select_type 的值就是 MATERIALIZED 。例如：
 
   ```mysql
-  -- 查询语句
+  -- EXPLAIN 语句
   EXPLAIN SELECT * FROM s1 WHERE key1 IN (SELECT key1 FROM s2);
   
-  -- 查询结果
+  -- 执行计划
   +----+-------------+------------+------------+-------+---------------+----------+---------+------+------+----------+-------------+
   | id | select_type | table      | partitions | type  | possible_keys | key      | key_len | ref  | rows | filtered | Extra       |
   +----+-------------+------------+------------+-------+---------------+----------+---------+------+------+----------+-------------+
@@ -246,6 +246,38 @@ EXPLAIN 语句结果集中第三条记录 id 值为 NULL ，这是因为 UNION �
 <br />
 
 ### partitions
+
+---
+
+由于我们未介绍过分区的概念，该字段不多介绍。一般而言，查询语句的执行计划，其中记录的 partitions 列的值均为 null 。
+
+<br />
+
+### type
+
+---
+
+**执行计划的一条记录就代表着 MySQL 对某个表执行查询时的访问方法，而 type 字段，就代表了这个访问方法是什么。**
+
+在前面的章节中，我们只介绍了对使用 InnoDB 存储引擎的表进行单表访问的一些访问方法，完整的访问方法却远远不止这些，下面我们来一一介绍它们：
+
+* system：当表中只有一条记录并且该表使用的存储引擎的统计数据是精确的（例如 MyISAM、Memory ），那么该表的访问方法就是 system 。
+* const：当我们根据主键或者唯一二级索引列与常数进行等值匹配时，对单表的访问方法就是 const 。
+* eq_ref：**在连接查询时**，若被驱动表是通过主键或者唯一二级索引列等值匹配的方式进行访问的（若该主键或者唯一二级索引是联合索引的话，所有的索引列都必须进行等值比较），则**对该被驱动表的访问方法**就是 eq_ref 。
+* ref：当通过普通二级索引列与常量进行等值匹配来查询某个表，这时对该表的访问方法就**可能**是 ref 。
+* fulltext：全文索引，暂时跳过不细讲。
+* ref_or_null：当对普通二级索引进行等值匹配查询，且该索引列的值也可以是 NULL 值时，对该表的访问方法就**可能**是 ref_or_null 。
+* index_merge：
+
+
+
+
+
+
+
+<br />
+
+### possible_keys 和 key
 
 ---
 
