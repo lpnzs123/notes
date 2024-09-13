@@ -6,7 +6,7 @@
 
 ---
 
-1. C 语言教程（阮一峰）：标准库 =》stdlib.h =》rand()
+1. C 语言教程（阮一峰）：标准库 =》stdlib.h =》atexit()，at_quick_exit()
 
 <br />
 
