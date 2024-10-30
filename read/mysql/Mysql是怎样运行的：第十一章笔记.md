@@ -338,7 +338,7 @@ SELECT * FROM t1, t2 WHERE t1.m1 > 1 AND t1.m1 = t2.m2 AND t2.n2 < 'd';
 
 Join Buffer 的默认大小为 262144 Byte（即 256 KB），其大小可以通过启动参数或者系统变量`join_buffer_size`进行配置，最小可以设置为 128 Byte 。
 
-也就是说，现在我们优化被驱动表的查询，有一下两种方式了：
+也就是说，现在我们优化被驱动表的查询，有以下两种方式了：
 
 1. 为被驱动表加上效率高的索引。
 2. 调大`join_buffer_size`的值。
