@@ -206,7 +206,7 @@ EXPLAIN FORMAT=JSON
 SELECT * 
 FROM s1 
 INNER JOIN s2 ON s1.key1 = s2.key2 
-WHERE s1.common_field = 'a'\G
+WHERE s1.common_field = 'a'
 
 -- 执行计划（JSON 格式）
 EXPLAIN: {
@@ -303,6 +303,33 @@ EXPLAIN: {
 ## Extented EXPLAIN
 
 ---
+
+在使用 EXPLAIN 语句查看了某个查询的执行计划后，紧接着可以使用`SHOW WARNINGS`语句查看与这个查询的执行计划相关的一些扩展信息。
+
+例如：
+
+```mysql
+--  EXPLAIN 语句和 SHOW WARNINGS 语句
+EXPLAIN SELECT s1.key1, s2.key1 FROM s1 LEFT JOIN s2 ON s1.key1 = s2.key1 WHERE s2.common_field IS NOT NULL;
+SHOW WARNINGS
+
+-- 执行计划信息省略...
+
+-- SHOW WARNINGS 信息
+Level: Note
+-- 当 Code 字段为 1003 时，Message 字段展示的信息类似于查询优化器将我们的查询语句重写后的语句。但这也是类似于，并不是等价于，即 Message 字段展示的重写查询语句并不是标准的查询语句，大多数情况下无法当作一个标准的 SQL 运行，只是一个依据用于理解 MySQL 将会如何执行查询语句。
+Code: 1003
+-- 查询优化器将左（外）连接查询优化为了内连接查询，因为搜索条件`s2.common_field IS NOT NULL`满足了空值拒绝的需求
+Message: /* select#1 */ 
+	select	`xiaohaizi`.`s1`.`key1` AS `key1`,
+			`xiaohaizi`.`s2`.`key1` AS `key1` 
+	from `xiaohaizi`.`s1` 
+	join `xiaohaizi`.`s2` 
+	where ((`xiaohaizi`.`s1`.`key1` = `xiaohaizi`.`s2`.`key1`) 
+           and (`xiaohaizi`.`s2`.`common_field` is not null))
+```
+
+
 
 
 
