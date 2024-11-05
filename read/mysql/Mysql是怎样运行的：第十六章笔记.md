@@ -211,33 +211,44 @@ WHERE s1.common_field = 'a'
 -- 执行计划（JSON 格式）
 EXPLAIN: {
   "query_block": {
-    "select_id": 1,  # 整个查询语句中仅有 1 个 SELECT 关键字，该关键字对应的 id 号为 1
+    # 整个查询语句中仅有 1 个 SELECT 关键字，该关键字对应的 id 号为 1
+    "select_id": 1,  
     "cost_info": {
-      "query_cost": "3197.16"  # 整个查询的执行成本预计为 3197.16
+      # 整个查询的执行成本预计为 3197.16
+      "query_cost": "3197.16"  
     },
-    "nested_loop": [  # 几个表之间采用嵌套循环连接算法执行
-    
+    # 几个表之间采用嵌套循环连接算法执行
+    "nested_loop": [  
       # 以下是参与嵌套循环连接算法的各个表的信息
       {
         "table": {
-          "table_name": "s1",  # s1 表是驱动表
-          "access_type": "ALL",  # 访问方法为 ALL，意味着使用全表扫描访问
-          "possible_keys": [  # 可能使用的索引
+          # s1 表是驱动表
+          "table_name": "s1",  
+          # 访问方法为 ALL，意味着使用全表扫描访问
+          "access_type": "ALL",  
+          # 可能使用的索引
+          "possible_keys": [  
             "idx_key1"
           ],
-          "rows_examined_per_scan": 9688,  # 查询一次s1表大致需要扫描 9688 条记录
-          "rows_produced_per_join": 968,  # 驱动表s1的扇出是 968
-          "filtered": "10.00",  # condition filtering 代表的百分比
+          # 查询一次s1表大致需要扫描 9688 条记录
+          "rows_examined_per_scan": 9688,  
+          # 驱动表s1的扇出是 968
+          "rows_produced_per_join": 968,  
+          # condition filtering 代表的百分比
+          "filtered": "10.00",  
           "cost_info": {
         	# 在JSON格式的执行计划中，read_cost = IO 成本 + rows_examined_per_scan × (1 - filtered) 条记录的 CPU 成本
         	# 在执行计划的输出列中，read_cost = IO 成本 + rows × (1 - filtered) 条记录的 CPU 成本
             "read_cost": "1840.84",  
         	# eval_cost = rows_examined_per_scan × filtered 条记录的 CPU 成本
-            "eval_cost": "193.76",  
-            "prefix_cost": "2034.60",  # 单独查询 s1 表总共的成本 = read_cost + eval_cost
-            "data_read_per_join": "1M"  # 表示在此次查询中需要读取的数据量
+            "eval_cost": "193.76",
+            # 单独查询 s1 表总共的成本 = read_cost + eval_cost
+            "prefix_cost": "2034.60",  
+            # 表示在此次查询中需要读取的数据量
+        	"data_read_per_join": "1M"  
           },
-          "used_columns": [  # 执行查询中涉及到的列
+          # 执行查询中涉及到的列
+          "used_columns": [  
             "id",
             "key1",
             "key2",
@@ -254,22 +265,33 @@ EXPLAIN: {
       },
       {
         "table": {
-          "table_name": "s2",  # s2 表是被驱动表
-          "access_type": "ref",  # 访问方法为 ref，意味着使用索引等值匹配的方式访问
-          "possible_keys": [  # 可能使用的索引
+          # s2 表是被驱动表
+          "table_name": "s2",  
+          # 访问方法为 ref，意味着使用索引等值匹配的方式访问
+          "access_type": "ref",  
+           # 可能使用的索引
+          "possible_keys": [ 
             "idx_key2"
           ],
-          "key": "idx_key2",  # 实际使用的索引
-          "used_key_parts": [  # 使用到的索引列
+          # 实际使用的索引
+          "key": "idx_key2", 
+          # 使用到的索引列
+          "used_key_parts": [  
             "key2"
           ],
-          "key_length": "5",  # key_len
-          "ref": [  # 与 key2 列进行等值匹配的对象
+          # key_len
+          "key_length": "5",  
+          # 与 key2 列进行等值匹配的对象
+          "ref": [  
+            
             "xiaohaizi.s1.key1"
           ],
-          "rows_examined_per_scan": 1,  # 查询一次 s2 表大致需要扫描 1 条记录
-          "rows_produced_per_join": 968,  # 被驱动表s2的扇出是 968（由于后边没有多余的表进行连接，所以这个值也没什么用）
-          "filtered": "100.00",  # condition filtering 代表的百分比
+          # 查询一次 s2 表大致需要扫描 1 条记录
+          "rows_examined_per_scan": 1,  
+          # 被驱动表s2的扇出是 968（由于后边没有多余的表进行连接，所以这个值也没什么用）
+          "rows_produced_per_join": 968,  
+          # condition filtering 代表的百分比
+          "filtered": "100.00",  
           
           # s2表使用索引进行查询的搜索条件
           "index_condition": "(`xiaohaizi`.`s1`.`key1` = `xiaohaizi`.`s2`.`key2`)",
@@ -279,9 +301,11 @@ EXPLAIN: {
             "eval_cost": "193.76",
         	# 单次查询 s1、多次查询 s2 表总共的成本（即整个连接查询预计的成本 = s1 表的 prefix_cost 值 + s2 表的 read_cost 值 + s2 表的 eval_cost 值）
             "prefix_cost": "3197.16",  
-            "data_read_per_join": "1M"  # 读取的数据量
+        	# 读取的数据量
+            "data_read_per_join": "1M"  
           },
-          "used_columns": [  # 执行查询中涉及到的列
+          # 执行查询中涉及到的列
+          "used_columns": [  
             "id",
             "key1",
             "key2",
@@ -313,7 +337,7 @@ EXPLAIN: {
 EXPLAIN SELECT s1.key1, s2.key1 FROM s1 LEFT JOIN s2 ON s1.key1 = s2.key1 WHERE s2.common_field IS NOT NULL;
 SHOW WARNINGS
 
--- 执行计划信息省略...
+-- 执行计划略...
 
 -- SHOW WARNINGS 信息
 Level: Note
