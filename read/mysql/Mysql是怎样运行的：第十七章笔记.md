@@ -260,9 +260,9 @@ TRACE: {
                         "chosen": true  
                       },
                       {
-                        # 使用idx_key1的成本分析
+                        # 使用 idx_key1 的成本分析
                         "index": "idx_key1",
-                        # 使用idx_key1的范围区间
+                        # 使用 idx_key1 的范围区间
                         "ranges": [
                           "z < key1"
                         ] /* ranges */,
@@ -278,9 +278,9 @@ TRACE: {
                         "cause": "cost"   
                       },
                       {
-                        # 使用idx_key3的成本分析
+                        # 使用 idx_key3 的成本分析
                         "index": "idx_key3",
-                        # 使用idx_key3的范围区间
+                        # 使用 idx_key3 的范围区间
                         "ranges": [
                           "a <= key3 <= a",
                           "b <= key3 <= b",
@@ -304,7 +304,7 @@ TRACE: {
                     } /* analyzing_roworder_intersect */
                   } /* analyzing_range_alternatives */,
                   
-                  # 对于上述单表查询s1最优的访问方法
+                  # 对于上述单表查询 s1 最优的访问方法
                   "chosen_range_access_summary": {
                     "range_access_plan": {
                       "type": "range_scan",
@@ -380,7 +380,7 @@ TRACE: {
       } /* join_optimization */
     },
     {
-      # execute阶段
+      # execute 阶段
       "join_execution": {    
         "select#": 1,
         "steps": [
@@ -390,7 +390,7 @@ TRACE: {
   ] /* steps */
 }
 
-# 因优化过程文本太多而丢弃的文本字节大小，值为0时表示并没有丢弃
+# 因优化过程文本太多而丢弃的文本字节大小，值为 0 时表示并没有丢弃
 MISSING_BYTES_BEYOND_MAX_MEM_SIZE: 0
 
 # 权限字段
