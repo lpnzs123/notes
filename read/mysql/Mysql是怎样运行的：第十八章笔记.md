@@ -204,7 +204,7 @@ SET GLOBAL innodb_old_blocks_pct = 40;
 
   针对上述问题，InnoDB 规定，**对某个处在 old 区域的缓存页进行第一次访问时，会在它对应的控制块中记录下对应访问时间。若后续的访问时间与第一次的访问时间在某个时间间隔内，那么该页面的控制块就不会被从 old 区域移动到 young 区域的头部，否则就会将它移动到 young 区域的头部。**
 
-  这个时间间隔由系统变量 innodb_old_blocks_time 控制，默认值是 1000 ms。
+  这个时间间隔由系统变量`innodb_old_blocks_time`控制，默认值是 1000 ms。
 
   ```mysql
   SHOW VARIABLES LIKE 'innodb_old_blocks_time';
@@ -231,13 +231,13 @@ SET GLOBAL innodb_old_blocks_pct = 40;
 
 有许多针对这一点的优化策略，我们简述一个：
 
-**young 区域的头 1/4 的部分，其缓存页就算被再次访问，也不会将其移动到 young 区域的头部。**
+**young 区域的头 1 / 4 的部分，其缓存页就算被再次访问，也不会将其移动到 young 区域的头部。**
 
 这样，我们就降低了调整 LRU 链表的频率，适当的提升了性能。
 
 更多的 LRU 链表的优化措施这里不再赘述。
 
-> 我们在了解上述概念后需要重构一下随机预读的概念。那就是，若 Buffer Pool 中已经缓存了某个区的 13 个连续的页面，并且这 13 个页面都是非常热的页面（即缓存页对应的控制块在整个 young 区域的头 1/4 处），那么不论这些页是否是顺序读取，都会触发一次异步读取本区中所有其他的页面到 Buffer Pool 中的请求，这就是随机预读。
+> 我们在了解上述概念后需要重构一下随机预读的概念。那就是，若 Buffer Pool 中已经缓存了某个区的 13 个连续的页面，并且这 13 个页面都是非常热的页面（即缓存页对应的控制块在整个 young 区域的头 1 / 4 处），那么不论这些页是否是顺序读取，都会触发一次异步读取本区中所有其他的页面到 Buffer Pool 中的请求，这就是随机预读。
 
 <br />
 
@@ -321,6 +321,106 @@ chunk 的大小可以在启动操作 MySQL 服务器时，通过`innodb_buffer_p
 <br />
 
 ### 配置 Buffer Pool 时的注意事项
+
+---
+
+**为了保证每一个 Buffer Pool 实例中，包含的 chunk 数量相同，`innodb_buffer_pool_size`的值（Buffer Pool 的总大小）必须是`innodb_buffer_pool_chunk_size × innodb_buffer_pool_instances`乘积（每个 Buffer Pool 实例中含有一个 chunk，所有 chunk 大小的总和，即 Buffer Pool 至少含有 chunk 的总大小）的整数倍。**
+
+根据上述规定，有以下几种情况：
+
+* `innodb_buffer_pool_size`的值与`innodb_buffer_pool_chunk_size × innodb_buffer_pool_instances`的乘积相等或为后者的整数倍。
+
+  例如：服务器启动时，指定`innodb_buffer_pool_instances`的值为 16，`innodb_buffer_pool_chunk_size`的值不指定（取其默认为 128M）。那么`innodb_buffer_pool_size`指定的值必须为 2G（16 * 128 M / 1024 M = 2147483648 Bytes）或者为 2G 的整数倍。
+
+  **注意：`innodb_buffer_pool_size`值单位为字节。**
+
+* `innodb_buffer_pool_size`的值大于`innodb_buffer_pool_chunk_size × innodb_buffer_pool_instances`的乘积并且不是后者的整数倍。
+
+  例如：服务器启动时，指定`innodb_buffer_pool_instances`的值为 16，`innodb_buffer_pool_chunk_size`的值不指定（取其默认为 128M），指定`innodb_buffer_pool_size`的值为 9G，此时服务器会自动把`innodb_buffer_pool_size`的值调整为 10G（10737418240 Bytes）。
+
+* `innodb_buffer_pool_chunk_size × innodb_buffer_pool_instances`的乘积大于`innodb_buffer_pool_size`的值。
+
+  例如：服务器启动时，指定`innodb_buffer_pool_size`的值为 2G，指定`innodb_buffer_pool_instances`的值为 16，指定`innodb_buffer_pool_chunk_size`的值被设置为 256M，此时`innodb_buffer_pool_chunk_size`的值会被服务器改写为`innodb_buffer_pool_size / innodb_buffer_pool_instances`的值，即 2G / 16 = 128M = 134217728 Bytes。
+
+<br />
+
+### Buffer Pool 中存储的其他信息
+
+---
+
+Buffer Pool 的缓存页除了可以用来缓存磁盘上的页面，还可以用来存储锁信息、自适应哈希索引等信息。
+
+<br />
+
+#### 查看 Buffer Pool 的状态信息
+
+---
+
+可以通过`SHOW ENGINE INNODB STATUS`这个 SQL 语句来查看关于 InnoDB 存储引擎，在运行过程中的一些状态信息，状态信息中包括了 Buffer Pool 的一些信息，详解如下：
+
+* Total memory allocated：代表 Buffer Pool 向操作系统申请的，连续的内存空间的大小。包括了全部控制块、缓存页和碎片的大小。
+
+* Dictionary memory allocated：为数据字典信息分配的内存空间大小。
+
+  **注意：数据字典信息的内存空间大小与 Buffer Pool 无关，数据字典信息的内存空间大小不包括在 Total memory allocated 中。**
+
+* Buffer pool size：代表该 Buffer Pool 中可以容纳多少缓存页。
+
+* Free buffers：代表当前 Buffer Pool 还有多少空闲缓存页，即 free 链表中还有多少个节点。
+
+* Database pages：代表 LRU 链表中页的数量，包含 young 和 old 两个区域的节点数量。
+
+* Old database pages：代表 LRU 链表 old 区域的节点数量。
+
+* Modified db pages：代表脏页的数量，即 flush 链表中的节点数。
+
+* Pending reads：正等待从磁盘上加载到 Buffer Pool 中的页面数量。磁盘页加载到 Buffer Pool 中时，Buffer Pool 首先会为其分配一个缓存页以及缓存页对应的控制块，然后把这个控制块添加到 LRU 链表 old 区域的头部。但是此时磁盘页还未被加载到 Buffer Pool 中，这时，Pending reads 的值便会加 1。 
+
+* Pending writes LRU：即将从 LRU 链表中刷新到磁盘中的页面数量。
+
+* Pending writes flush list：即将从 flush 链表中刷新到磁盘中的页面数量。
+
+* Pending writes single page：即将以单个页面的形式刷新到磁盘中的页面数量。
+
+* Pages made young：代表 LRU 链表中曾经从 old 区域移动到 young 区域头部的节点数量。这里需要留意的是，一个节点只有从 old 区域移动到 young 区域头部，才会将 Pages made young 的值加 1。若该节点本来就在 young 区域的后 3 / 4 处，那么下一次访问这个页面时，虽然也会将它移动到 young 区域头部，但是这个过程并不会使  Pages made young 的值加 1。
+
+* Page made not young：系统变量`innodb_old_blocks_time`设置的值若大于 0，首次访问或后续访问某个处在 old 区域的节点时，由于不符合时间间隔的限制而不能将其移动到 young 区域头部，会导致 Page made not young 的值加 1。这里需要留意的是，在 LRU 链表中，一个处在 young 区域头 1 / 4 处的节点，没有因为缓存页被访问而被移动到 young 区域的头部，这不会使得 Page made not young 的值加 1。
+
+  **注意：young 区域的头 1 / 4 的部分，其缓存页就算被再次访问，也不会将其移动到 young 区域的头部。**
+
+* youngs/s：代表每秒从 old 区域移动到 young 区域头部的节点数量。
+
+* non-youngs/s：代表每秒由于不满足时间限制而不能从 old 区域移动到 young 区域头部的节点数量。
+
+* Pages read、created、written：分别代表读取、创建和写入了多少页。后边跟着读取、创建和写入的速率。
+
+* Buffer pool hit rate：表示在过去某段时间，平均访问1000次页面，有多少次该页面已经被缓存到了 Buffer Pool 中。
+
+* young-making rate：表示在过去某段时间，平均访问1000次页面，有多少次访问使页面移动到了 young 区域的头部。这里需要留意的是，这里会统计两部分数据，分别是：
+
+  * 从 old 区域移动到 young 区域头部的次数。
+  * 从 young 区域移动到 young 区域头部的次数。即位于 young 区域后 3 / 4 的节点，因为其缓存页被访问而导致其被移动到 young 区域头部的次数。
+
+* not (young-making rate)：表示在过去某段时间，平均访问1000次页面，有多少次访问没有使页面移动到 young 区域的头部。这里需要留意的是，这里会统计两部分数据，分别是：
+
+  * 设置了`innodb_old_blocks_time`系统变量而导致访问了 old 区域中的节点，但没有把它们移动到 young 区域的次数。
+  * 因为节点在 young 区域的头 1 / 4 处而没有被移动到 young 区域头部的次数。
+
+* LRU len：代表 LRU 链表中节点的数量。
+
+* unzip_LRU：代表 unzip_LRU 链表中节点的数量。
+
+* I/O sum：最近 50s 读取磁盘页的总数。
+
+* I/O cur：现在正在读取的磁盘页数量。
+
+* I/O unzip sum：最近50s解压的页面数量。
+
+* I/O unzip cur：正在解压的页面数量。
+
+<br />
+
+## 总结
 
 ---
 
