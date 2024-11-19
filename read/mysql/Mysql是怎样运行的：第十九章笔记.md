@@ -300,9 +300,94 @@ ROLLBACK 语句是程序员**手动**回滚事务时使用的语句，若事务�
 
 ---
 
+系统变量`autocommit`的值默认为 ON，意思是开启**事务的自动提交**。所谓事务的自动提交，即若不显式的使用`START TRANSACTION`或者`BEGIN`语句开启一个事务，那么每一条 SQL 语句都算是一个独立的事务。
+
+若我们关闭了事务的自动提交，那么在关闭事务的自动提交后接着书写的多条 SQL 语句，在显式的`COMMIT`或`ROLLBACK`之前，都处在同一个事务中。
+
+关闭事务的自动提交有两种方法：
+
+* 使用 SQL 语句`SET autocommit = OFF;`。
+* 显式的使用`START TRANSACTION`或者`BEGIN`语句开启一个事务。
+
+**注意：第二种关闭事务自动提交的方法，仅在本次事务提交或者回滚前生效，也就是说只会暂时的关闭掉自动提交的功能。**
+
+<br />
+
+### 隐式提交
+
+---
+
+当我们关闭了事务的自动提交后，输入的某些特殊语句导致了事务被悄悄的提交掉，这种情况便是**隐式提交**。
+
+会导致隐式提交的特殊语句包括：
+
+* 定义或修改数据库对象的数据定义语言（DDL，即 Data Definition Language）。
+
+  数据库对象指的是数据库、表、视图、存储过程等。当我们使用 CREATE、ALTER、DROP 等语句去修改数据库对象时，就会隐式的提交掉前面的 SQL 语句所属于的事务。
+
+* 使用或修改 mysql 数据库中的表。
+
+  当我们使用`ALTER USER`、`CREATE USER`、`DROP USER`、`GRANT`、`RENAME USER`、`REVOKE`、`SET PASSWORD`等语句时也会隐式的提交掉前面的语句所属于的事务。
+
+* 关于事务控制的语句。
+
+  当上一个事务还没有被提交或回滚，我们就开启了下一个事务或将系统变量`autocommit`的值从 OFF 设置为 ON，那么上一个事务会被隐式的提交掉。
+
+* 关于锁定的语句。
+
+  当上一个事务还没有被提交或回滚，我们就使用`LOCK TABLES`、`UNLOCK TABLES`等关于锁定的语句，那么上一个事务会被隐式的提交掉。
+
+* 加载数据的语句。
+  
+  例如使用`LOAD DATA`语句来批量的往数据库中导入数据，会导致隐式的提交前面语句所属的事务。
+  
+* 关于 MySQL 复制的一些语句。
+  
+  使用`START SLAVE`、`STOP SLAVE`、`RESET SLAVE`、`CHANGE MASTER TO`等语句时也会隐式的提交前面语句所属的事务。
+  
+* 其他的一些语句。
+  
+  使用`ANALYZE TABLE`、`CACHE INDEX`、`CHECK TABLE`、`FLUSH`、 `LOAD INDEX INTO CACHE`、`OPTIMIZE TABLE`、`REPAIR TABLE`、`RESET`等语句也会隐式的提交前面语句所属的事务。
+  
+
+<br />
+
+### 保存点
+
+---
+
+事务提交或回滚之前我们可以设立多个保存点（英文名：savepoint）。
+
+当我们不想因为一个 SQL 语句的出错导致整个事务的回滚，而后需要重新写一遍事务中所有的 SQL 语句时，我们可以通过保存点将数据库回滚到打保存点时的数据库状态。
+
+```mysql
+-- 开启事务 SQL
+BEGIN;
+
+-- 执行 SQL1（这是一个正确的 SQL 语句）
+...
+
+-- 打一个保存点 s1，语法为：SAVEPOINT 保存点名称;
+SAVEPOINT s1;
+
+-- 执行 SQL2（这是一个错误的 SQL 语句）
+...
+
+-- 回滚到保存点 s1，语法为：ROLLBACK [WORK] TO [SAVEPOINT] 保存点名称;
+-- 回滚保存点语法中的单词 WORK 和 SAVEPOINT 都可有可无
+-- 注意，若 ROLLBACK 语句后不跟随保存点的名称，则会直接回滚到事务执行之前的状态。
+ROLLBACK TO s1;
+
+-- 执行 SQL3（这是一个正确的 SQL 语句）
+...
+
+-- 释放（删除）保存点 s1，语法为：RELEASE SAVEPOINT 保存点名称;
+RELEASE SAVEPOINT s1;
+```
 
 
 
+  
 
 
 
