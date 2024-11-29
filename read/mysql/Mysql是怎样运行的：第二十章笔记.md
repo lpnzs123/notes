@@ -224,9 +224,9 @@ InnoDB 对 redo 日志结构中的某些字段可能会进行**压缩**处理。
 
   **注意：在 InnoDB 的一些功能中，乐观插入也可能产生多条 redo 日志。**
 
-现在假设我们在悲观插入过程中，刚刚执行到其步骤 5 时系统便崩溃了。这就意味着，我们在悲观插入的过程中只记录了一部分 redo 日志，在系统重启时，仅用这一部分 redo 日志明显是无法将系统恢复到崩溃之前的状态的，就算恢复一部分，我们得到的 B+ 树也是不正确的。
+现在假设我们在悲观插入过程中，刚刚执行到其步骤 5 时系统便崩溃了。这就意味着，我们在悲观插入的过程中只记录了一部分 redo 日志，在系统重启时，仅用这一部分 redo 日志明显是无法将系统恢复到崩溃之前的状态的，就算用其恢复了，我们得到的 B+ 树也是不正确的。
 
-不可接受！所以 InnoDB 在执行需要保证原子性的操作时，必须以**组**的形式来记录 redo 日志。在系统崩溃重启时，也是针对一个组中的 redo 日志，要么全恢复，要么全不恢复！
+这样是不可接受的！所以 InnoDB 在执行需要保证原子性的操作时，必须以**组**的形式来记录 redo 日志。在系统崩溃重启时，也是针对一个组中的 redo 日志，要么全恢复，要么全不恢复！
 
 那么 InnoDB 是如何做到这一点的呢？我们分情况讨论一下：
 
@@ -243,17 +243,92 @@ InnoDB 对 redo 日志结构中的某些字段可能会进行**压缩**处理。
 讲完了组的概念，我们来说说它的应用场景：
 
 * 更新 Max Row ID 属性时产生的 redo 日志是**不可分割的（即一组）**。
-* 向聚簇索引对应的 B+ 树的页面中插入一条记录时产生的 redo 日志是不可分割的。
-* 向某个二级索引对应 B+ 树的页面中插入一条记录时产生的 redo 日志是不可分割的。
+* 向聚簇索引对应的 B+ 树的页面中插入一条记录时产生的 redo 日志是**不可分割的（即一组）**。
+* 向某个二级索引对应 B+ 树的页面中插入一条记录时产生的 redo 日志是**不可分割的（即一组）**。
 * 等等...
 
 <br />
 
+### Mini-Transaction 的概念
 
+---
 
+MySQL 把对底层页面中的一次原子访问过程称之为**一个 Mini-Transaction**，**简称 mtr**。
 
+例如，修改一次 Max Row ID 的值算是一个 mtr，向某个索引对应的 B+ 树中插入一条记录的过程，也算是一个 mtr。
 
+一个 mtr 就是一组 redo 日志，这一组 redo 日志是一个不可分割的整体。
 
+综上所述，**一个事务可以包含若干条语句，每一条语句又是由若干个 mtr 组成，每个 mtr 中又包含了若干条 redo 日志。**
+
+<br />
+
+## redo 日志的写入过程
+
+---
+
+### redo log block
+
+---
+
+为了更好的进行系统崩溃恢复，InnoDB 把通过 mtr 生成的 redo 日志，都放在了大小为 512 字节的**页**中。**我们这里把用来存储 redo 日志的页称为 block**，与表空间中的页做区分。
+
+一个 redo log block 的结构如下（各个部分按序号顺序，从上到下排列）：
+
+1. log block header（地址从 0 到 12 B，占用 12 字节）。
+2. log block body（地址从 12B 到 508B，占用 496 字节）。
+3. log block trailer（地址从 508B 到 512B，占用 4 字节）。
+
+redo 日志就是存储到 redo log block 的 log block body 部分中。
+
+log block header 和 log block trailer 部分分别存储了一些管理信息，我们分别介绍一下：
+
+* 对于 log block header 部分（各个部分按序号顺序，从上到下排列）：
+
+  1. LOG_BLOCK_HDR_NO（地址从 0 到 4B，占用 4 字节）：每个 block 都有一个大于 0 的唯一标号，即本属性值。
+
+  2. LOG_BLOCK_HDR_DATA_LEN（地址从 4B 到 6B，占用 2 字节）：表示 block 中已经使用了多少字节。因为 log block body 部分的地址从第 12 个字节开始，所以本属性默认值为 12。随着往 block 中写入更多的 redo 日志，本属性持续增长直至 log block body 部分被写满，此时本属性的值为 512。 
+
+  3. LOG_BLOCK_FIRST_REC_GROUP（地址从 6B 到 8B，占用 2 字节）：一条 redo 日志即一条 redo 日志记录（redo log record），一个 mtr 会产生多条 redo 日志记录，这些个 redo 日志记录被称之为一个 redo 日志记录组（redo log record group）。
+
+     本属性的值代表了 block 中第一个 mtr 生成的 redo 日志记录组的偏移量，也是 block 中第一个 mtr 生成的第一条 redo 日志的偏移量。
+
+  4. LOG_BLOCK_CHECKPOINT_NO（地址从 8B 到 12B，占用 4 字节）：本属性的值代表了 checkpoint 的序号。
+
+* 对于 log block trailer 部分（各个部分按序号顺序，从上到下排列）：
+
+  1. LOG_BLOCK_CHECKSUM（地址从 508B 到 512B，占用 4 字节）：本属性的值代表了 block 的校验值，用于正确性校验。
+
+<br />
+
+### redo 日志缓冲区
+
+---
+
+写入 redo 日志时并不是直接对磁盘进行 IO 的，在服务器启动时，MySQL 会向操作系统申请一大片称之为 **redo log buffer 的连续内存空间，即 redo 日志缓冲区，又简称为 log buffer**。
+
+log buffer 被划分成若干个连续的 redo log block。log buffer 的大小我们可以通过启动参数`innodb_log_buffer_size`来指定，在 MySQL 5.7.21 版本中，启动参数`innodb_log_buffer_size`的默认值为 16MB。
+
+<br />
+
+### redo 日志写入 log buffer
+
+---
+
+向 log buffer 中写入 redo 日志的过程是**顺序**的，即只有写完 log buffer 前面的 block 后，才会往下一个 block 中写 redo 日志。
+
+那么 redo 日志应该写在 log buffer 的哪个 block 的哪个偏移量处呢？
+
+InnoDB 存在一个全局变量`buf_free`，该变量指明了后续写入 log buffer 的 redo 日志，应该写入到 log buffer 的哪一个位置。同时，由于并不是每生成一条 redo 日志，就将其插入到 log buffer 中，而是每个 mtr 运行过程中产生的 redo 日志先暂时存到一个地方，当 mtr 结束时再将其产生的一组 redo 日志全部复制到 log buffer 中，我们保证了 redo 日志写入 log buffer 的原子性。
+
+现在假设有两个事务分别是 T1 和 T2，两个事务中分别含有两个 mtr，分别是 mtr_t1_1、mtr_t1_2 和 mtr_t2_1、mtr_t2_2。由于不同的事务可能并发执行，所以 T1 和 T2 事务的 mtr 可能是交替执行的，执行顺序可能像这样：
+
+1. mtr_t1_1。
+2. mtr_t2_1。
+3. mtr_t1_2。
+4. mtr_t2_2。
+
+每个 mtr 执行完毕时，都会将其生成的一组 redo 日志复制到 log buffer 中，也就是说，T1、T2 两个事务的 mtr 因可能交替执行生成的对应的一组 redo 日志，也可能会交替的被复制到 log buffer 中。不同的 mtr 产生的一组 redo 日志大小不一，有的多，有的少。
 
 
 
