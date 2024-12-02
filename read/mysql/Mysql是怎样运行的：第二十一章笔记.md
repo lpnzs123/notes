@@ -104,7 +104,36 @@ redo 日志文件组的每个文件大小都一致，格式也一致。其中，
 
 ---
 
+存在一个全局变量`Log Sequeue Number`（中文为**日志序列号**，**简称 lsn**，专为 InnoDB 设计）用来记录已经写入的 redo 日志量，该全局变量的初始值为 8704，即一条 redo 日志也未写入时，lsn 的值为 8704。
 
+全局变量`Log Sequeue Number`自系统开始运行便不断因为页面的修改（不断的页面修改意味着不断的 redo 日志的生成）而递增。在计算 **lsn 的增长量**时，我们需要把普通 block 格式的 log block header 和 log block trailer 大小也算进去。举个例子（注意结合普通的 block 结构理解）：
+
+1. 系统第一次启动后，初始化 log buffer 时，全局变量 buf_free（该变量指明了后续写入 log buffer 的 redo 日志，应该写入到 log buffer 的哪一个位置）会指向 log buffer 的，第一个 block 的，偏移量为 12 字节的地方。我们知道，log block header 部分的大小就是 12 字节，因此 lsn 的值在此时为：8704 + 12 = 8716。
+2. 执行 mtr_1（MySQL 把对底层页面中的一次原子访问过程称之为一个 mtr），假设其产生的一组 redo 日志大小为 200 字节，**没有超过**待插入的 block 的剩余空闲空间的大小，此时 lsn 的值为：8716 + 200 = 8916。
+3. 执行 mtr_2，假设其产生的一组 redo 日志大小为 1000 字节，**超过了**待插入的 block 的剩余空闲空间的大小，必须再分配两个 block 才能装下，那么此时 lsn 的值为：8916 + 1000（mtr_2 产生的一组 redo 大小）+ 2 * 12（2 个 log block header 的大小）+ 2 * 4（2 个 log block trailer 的大小）= 9948。
+
+综上所述，**每一组由 mtr 产生的 redo 日志，都有一个唯一的 LSN 值与其对应，LSN 值越小，说明 redo 日志组产生的越早**。
+
+<br />
+
+### flushed_to_disk_lsn
+
+---
+
+存在一个全局变量`buf_next_to_write`（专为 InnoDB 设计）用来标记当前的 log buffer 中，有哪些日志已经被刷新到磁盘中了。
+
+全局变量 lsn 表示的是当前系统中写入的 redo 日志量，这其中包括了已经写入到 log buffer 中，但还没被刷新到磁盘的 redo 日志。为了记录刷新到磁盘中的 redo 日志量，InnoDB 又提出了一个新的全局变量`flushed_to_disk_lsn`。
+
+此时，我们有了以下几个全局变量：
+
+* buf_next_to_write（标明位置）：用来标记当前的 log buffer 中，有哪些日志已经被刷新到磁盘中了。
+* flushed_to_disk_lsn（表示大小）：用来记录刷新到磁盘中的 redo 日志量。
+* buf_free（标明位置）：指明了后续写入 log buffer 的 redo 日志，应该写入到 log buffer 的哪一个位置。
+* Log Sequeue Number（表示大小）：用来记录已经写入的 redo 日志量。
+
+系统第一次启动时，全局变量`flushed_to_disk_lsn`和`Log Sequeue Number`的大小是相同的，都是 8704。但随着 redo 日志不断的写入 log buffer 中，两个全局变量的值会不断的拉开差距（明显的，新的 redo 日志刚被写入到 log buffer 中时，`Log Sequeue Number`的值会增长，`flushed_to_disk_lsn`的值会不变。随着不断有 log buffer 中的日志被刷新到磁盘上，`flushed_to_disk_lsn`的值才会跟着增长）。当两个全局变量的值再次相同时，就代表 log buffer 中所有的 redo 日志都已经刷新到磁盘中了。
+
+**注意：应用程序（这里指 MySQL）向磁盘文件写入，其实是先写到操作系统的缓冲区中。若某个写入操作要等到操作系统确认已经写入磁盘了，才会返回，那么此时需要调用一下操作系统提供的 fsync 函数。只有当系统执行了 fsync 函数了，全局变量`flushed_to_disk_lsn`的值才会跟着增长。当仅仅把 log buffer 中的 redo 日志，写入到操作系统缓冲区中，却没有显式的将 redo 日志刷新到磁盘中时，只有另一个全局变量`write_lsn`会跟着增长。上面的叙述中，我们混淆了全局变量`flushed_to_disk_lsn`和全局变量`write_lsn`混淆了，现在将其区分开来。**
 
 
 
