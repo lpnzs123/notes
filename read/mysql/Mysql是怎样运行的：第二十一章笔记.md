@@ -54,7 +54,7 @@ MySQL 的数据目录（使用`SHOW VARIABLES LIKE 'datadir'`查看）下，默�
 
 由上我们可知，redo 日志文件不止一个，而是一组，即**日志文件组**。组内的文件**命名格式**为：ib_logfile[数字]，数字从 0 开始依次递增。
 
-在将 redo 日志写入日志文件组时，会从 ib_logfile0 开始写，写满后往 ib_logfile1 中写，以此类推。当写到最后一个 ib_logfilen 文件时，就重新从 ib_logfile0 开始写。
+在将 redo 日志写入日志文件组时，会从 ib_logfile0 开始写，写满后往 ib_logfile1 中写，以此类推。当写满最后一个 ib_logfilen 文件时，就又从 ib_logfile0 开始写。
 
 上述将 redo 日志写入redo 日志文件组的行为会产生一个问题，就是写满了最后一个 ib_logfilen 文件，若从头开始写，就会覆盖掉 ib_logfile0 文件中的日志信息。这里 InnoDB 采用了 checkpoint 来解决这个问题。
 
@@ -70,7 +70,7 @@ log buffer 本质上是一片**连续的内存空间**，它被划分成了若�
 
 将 log buffer 中的 redo 日志刷新到磁盘的**本质**，就是把 block 的镜像写入日志文件中。因此，redo 日志文件其实也是由若干个 512 字节大小的 block 组成的。
 
-redo 日志文件组的每个文件大小都一致，格式也一致。其中，格式由两部分组成：
+redo 日志文件组的每个文件大小都一致，格式也一致。redo 日志文件格式由两部分组成：
 
 * 前 2048 个字节（即前 4 个 block）用来存储一些管理信息。
 * 第 2048 个字节往后的部分，用来存储 log buffer 中的 block 镜像。
@@ -133,7 +133,72 @@ redo 日志文件组的每个文件大小都一致，格式也一致。其中，
 
 系统第一次启动时，全局变量`flushed_to_disk_lsn`和`Log Sequeue Number`的大小是相同的，都是 8704。但随着 redo 日志不断的写入 log buffer 中，两个全局变量的值会不断的拉开差距（明显的，新的 redo 日志刚被写入到 log buffer 中时，`Log Sequeue Number`的值会增长，`flushed_to_disk_lsn`的值会不变。随着不断有 log buffer 中的日志被刷新到磁盘上，`flushed_to_disk_lsn`的值才会跟着增长）。当两个全局变量的值再次相同时，就代表 log buffer 中所有的 redo 日志都已经刷新到磁盘中了。
 
-**注意：应用程序（这里指 MySQL）向磁盘文件写入，其实是先写到操作系统的缓冲区中。若某个写入操作要等到操作系统确认已经写入磁盘了，才会返回，那么此时需要调用一下操作系统提供的 fsync 函数。只有当系统执行了 fsync 函数了，全局变量`flushed_to_disk_lsn`的值才会跟着增长。当仅仅把 log buffer 中的 redo 日志，写入到操作系统缓冲区中，却没有显式的将 redo 日志刷新到磁盘中时，只有另一个全局变量`write_lsn`会跟着增长。上面的叙述中，我们混淆了全局变量`flushed_to_disk_lsn`和全局变量`write_lsn`混淆了，现在将其区分开来。**
+**注意：应用程序（这里指 MySQL）向磁盘文件写入，其实是先写到操作系统的缓冲区中。若某个写入操作要等到操作系统确认已经写入磁盘了才会返回，那么此时需要调用一下操作系统提供的 fsync 函数。只有当系统执行了 fsync 函数了，全局变量`flushed_to_disk_lsn`的值才会跟着增长。当仅仅把 log buffer 中的 redo 日志写入到操作系统缓冲区中，却没有显式的将 redo 日志刷新到磁盘中时，只有另一个全局变量`write_lsn`会跟着增长。上面的叙述中，我们混淆了全局变量`flushed_to_disk_lsn`和全局变量`write_lsn`的概念，现在将其区分开来。**
+
+<br />
+
+### lsn 值和 redo 日志文件偏移量的对应关系
+
+---
+
+由每个 mtr 向磁盘中写入多少字节的日志，lsn 的值就增长多少，我们可以得出 lsn 值和 redo 日志文件偏移量的关系。
+
+例如，初始时 lsn 值为 8704（lsn 的初始值），对应文件偏移量是 2048（从 redo 日志文件的后半部分开始写）。经过两个 mtr 的执行后，文件偏移量增长到了 3292，那么此时 lsn 的值为：8704 +（3292 - 2048） = 9948。
+
+<br />
+
+### flush 链表中的 LSN
+
+---
+
+一个 mtr 的执行，不仅可能会产生一组不可分割的 redo 日志，在 mtr 结束时，还会把这一组 redo 日志写入到 log buffer 中。但是 mtr 结束时要做的事情不止于此，mtr 结束时**还会把在 mtr 执行过程中可能修改过的页面对应的控制块，加入到 Buffer Pool 的 flush 链表中**。
+
+第一次修改某个缓存在 Buffer Pool 中的页面时，会把这个页面对应的控制块插入到 flush 链表的**头部**，之后再次修改该页面时，由于其对应的控制块已经在 flush 链表中，所以就不再进行页面对应的控制块的二次插入了。即**flush 链表中的脏页，是按照页面的第一次修改时间，从大到小进行排序的**。在控制块插入到 flush 链表的这个过程中，会在对应的控制块中记录两个关于页面何时修改的属性：
+
+* oldest_modification：页面被加载到 Buffer Pool 中后，进行第一次修改时，会将修改该页面的 mtr 开始时对应的 lsn 值，写入到 oldest_modification 属性中。
+* newest_modification：页面被加载到 Buffer Pool 中后，每一次修改时，都会将修改该页面的 mtr 结束时对应的 lsn 值，写入到 newest_modification 属性中。即该属性表示页面最近一次修改后，对应的系统 lsn 值。
+
+举个例子：
+
+1. 系统第一次启动后，初始化 log buffer 时，全局变量 buf_free（该变量指明了后续写入 log buffer 的 redo 日志，应该写入到 log buffer 的哪一个位置）会指向 log buffer 的，第一个 block 的，偏移量为 12 字节的地方。我们知道，log block header 部分的大小就是 12 字节，因此 lsn 的值在此时为：8704 + 12 = 8716。
+
+2. 执行 mtr_1（**在 mtr_1 的执行过程中修改了页 a**），假设其产生的一组 redo 日志大小为 200 字节，没有超过待插入的 block 的剩余空闲空间的大小，此时 lsn 的值为：8716 + 200 = 8916。
+
+   mtr_1 执行结束之时，会将页 a 对应的控制块，加入到 flush 链表的头部。并且将 mtr_1 刚开始执行时对应的 lsn 值（为 8716）写入到页 a 对应控制块的 oldest_modification 属性中，将 mtr_1 执行结束时对应的 lsn 值（为 8916）写入到页 a 对应控制块的 newest_modification 属性中。
+
+3. 执行 mtr_2（**在 mtr_2 的执行过程中修改了页 b 和页 c，先修改页 c**），假设其产生的一组 redo 日志大小为 1000 字节，超过了待插入的 block 的剩余空闲空间的大小，必须再分配两个 block 才能装下，那么此时 lsn 的值为：8916 + 1000（mtr_2 产生的一组 redo 大小）+ 2 * 12（2 个 log block header 的大小）+ 2 * 4（2 个 log block trailer 的大小）= 9948。
+
+   mtr_2 执行结束之时，会将页 b 和页 c 对应的两个控制块都加入到 flush 链表的头部，并且将 mtr_2 刚开始执行时对应的 lsn 值（为 8916）写入到页 b 和页 c 对应的两个控制块的 oldest_modification 属性中，将 mtr_2 执行结束时对应的 lsn 值（为 9948）写入到页 b 和页 c 对应的两个控制块的 newest_modification 属性中。
+
+4. 执行 mtr_3（**在 mtr_3 的执行过程中修改了页 b 和页 d，先修改页 b**），假设其产生的一组 redo 日志大小为 52 字节，没有超过待插入的 block 的剩余空闲空间的大小，此时 lsn 的值为：9948 + 52 = 10000。
+
+   mtr_3 执行结束之时，会将页 d 对应的控制块加入到 flush 链表的头部，并且将 mtr_3 刚开始执行时对应的 lsn 值（为 9948）写入到页 d 对应控制块的 oldest_modification 属性中，将 mtr_3 执行结束时对应的 lsn 值（为 10000）写入到页 d 对应控制块的 newest_modification 属性中。
+
+   但是对于页 b，在mtr_3 执行结束之时，仅需要更新页 b 对应控制块的 newest_modification 属性值为 10000 即可。
+
+综上所述，**flush 链表中的脏页，会按照修改发生的时间顺序进行排序，即按照 oldest_modification 属性代表的 lsn 值进行排序。被多次更新的页面，其对应的控制块不会重复的插入到 flush 链表中，但是会更新页面对应控制块的 newest_modification 属性值**。
+
+<br />
+
+### checkpoint
+
+---
+
+我们知道，在将 redo 日志写入日志文件组时（即写入磁盘时），会从 ib_logfile0 文件开始写，写满后往 ib_logfile1 文件中写，以此类推。当写满最后一个 ib_logfilen 文件时，就又从 ib_logfile0 文件开始写。
+
+这样循环写入 redo 日志造成的问题就是会覆盖曾经写下的 redo 日志，但是，曾经的 redo 日志就不可以被覆盖了吗？当然是可以的。不过也不能随便覆盖，得有个判断标准，这个标准就是**被覆盖的 redo 日志对应的脏页，是否已经刷新到了磁盘里**。至于标准产生原因，如果对应的脏页已经刷新到了磁盘，还留着对应 redo 日志有什么用呢？系统崩溃重启也用不到这些日志呀。
+
+也就是说，对于一个 mtr 修改的页 a（明显的，页 a 是脏页），若页 a 仍在 Buffer Pool 中未被刷新到磁盘，那 mtr 生成的一组 redo 日志在磁盘上的空间，是不可以被覆盖的。若页 a 被刷新到了磁盘，那么页 a 对应的控制块就会从 flush 链表中移除，mtr 生成的一组 redo 日志在磁盘上的空间，就可以被覆盖掉。
+
+InnoDB 存在一个全局变量 checkpoint_lsn，用来表示系统中可以被覆盖的 redo 日志总量，这个全局变量的初始值也是 8704。
+
+
+
+
+
+
+
+
 
 
 
