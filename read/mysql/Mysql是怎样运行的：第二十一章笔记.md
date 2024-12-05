@@ -84,14 +84,14 @@ redo 日志文件组的每个文件大小都一致，格式也一致。redo 日�
 1. log file header：该字段描述了 redo 日志文件的一些整体属性，有属性如下：
    * LOG_HEADER_FORMAT（地址从 0 到 4B，占用 4 字节）：该属性表示 redo 日志的版本，例如在 MySQL 5.7.21 版本中该值永远为 1。
    * LOG_HEADER_PAD1（地址从 4B 到 8B，占用 4 字节）：该属性用作字节填充，无意义。
-   * LOG_HEADER_START_LSN（地址从 8B 到 16B，占用 8 字节）：该属性标记了本 redo 日志文件开始的 LSN 值（即文件偏移量为 2048 字节初对应的 LSN 值）。
+   * LOG_HEADER_START_LSN（地址从 8B 到 16B，占用 8 字节）：该属性标记了本 redo 日志文件开始的 lsn 值（即文件偏移量为 2048 字节初对应的 lsn 值）。
    * LOG_HEADER_CREATOR（地址从 16B 到 48B，占用 32 字节）：该属性为一个字符串，标记了本 redo 日志文件的创建者。正常运行时该值为 MySQL 的版本号，例如 MySQL 5.7.21。使用`mysqlbackup`命令创建的 redo 日志文件，该值为 ibbackup 和创建时间。
    * （地址从 48B 到 508B，占用 460 字节，没有被使用到）
    * LOG_BLOCK_CHECKSUM（地址从 508B 到 512B，占用 4 字节）：该属性表示本 block 的校验值，所有 block 都有，无需关心。
 2. checkpoint1：该字段记录了一些关于 checkpoint 的属性，checkpoint1 结构如下：
    * LOG_CHECKPOINT_NO（地址从 0 到 8B，占用 8 字节）：该属性为服务器做 checkpoint 的编号，每做一次 checkpoint，该属性值加 1。
-   * LOG_CHECKPOINT_LSN（地址从 8B 到 16B，占用 8 字节）：该属性为服务器做 checkpoint 结束时对应的 LSN 值，系统崩溃恢复时将从该属性值开始。
-   * LOG_CHECKPOINT_OFFSET（地址从 16B 到 24B，占用 8 字节）：该属性为 LOG_CHECKPOINT_LSN 属性对应的 LSN 值，在 redo 日志文件组中的偏移量。
+   * LOG_CHECKPOINT_LSN（地址从 8B 到 16B，占用 8 字节）：该属性为服务器做 checkpoint 结束时对应的 lsn 值，系统崩溃恢复时将从该属性值开始。
+   * LOG_CHECKPOINT_OFFSET（地址从 16B 到 24B，占用 8 字节）：该属性为 LOG_CHECKPOINT_LSN 属性对应的 lsn 值，在 redo 日志文件组中的偏移量。
    * LOG_CHECKPOINT_LOG_BUF_SIZE（地址从 24B 到 32B，占用 8 字节）：该属性为服务器在做 checkpoint 操作时，对应的 log buffer 的大小。
    * （地址从 32B 到 508B，占用 476 字节，没有被使用到）
    * LOG_BLOCK_CHECKSUM（地址从 508B 到 512B，占用 4 字节）：该属性表示本 block 的校验值，所有 block 都有，无需关心。
@@ -104,15 +104,15 @@ redo 日志文件组的每个文件大小都一致，格式也一致。redo 日�
 
 ---
 
-存在一个全局变量`Log Sequeue Number`（中文为**日志序列号**，**简称 lsn**，专为 InnoDB 设计）用来记录已经写入的 redo 日志量，该全局变量的初始值为 8704，即一条 redo 日志也未写入时，lsn 的值为 8704。
+存在一个全局变量`Log Sequeue Number`（中文为**日志序列号**，**简称 lsn**，专为 InnoDB 设计）用来记录当前系统已经写入的 redo 日志量，该全局变量的初始值为 8704，即一条 redo 日志也未写入时，lsn 的值为 8704。
 
 全局变量`Log Sequeue Number`自系统开始运行便不断因为页面的修改（不断的页面修改意味着不断的 redo 日志的生成）而递增。在计算 **lsn 的增长量**时，我们需要把普通 block 格式的 log block header 和 log block trailer 大小也算进去。举个例子（注意结合普通的 block 结构理解）：
 
-1. 系统第一次启动后，初始化 log buffer 时，全局变量 buf_free（该变量指明了后续写入 log buffer 的 redo 日志，应该写入到 log buffer 的哪一个位置）会指向 log buffer 的，第一个 block 的，偏移量为 12 字节的地方。我们知道，log block header 部分的大小就是 12 字节，因此 lsn 的值在此时为：8704 + 12 = 8716。
+1. 系统第一次启动后，初始化 log buffer 时，全局变量 buf_free（该变量指明了后续写入 log buffer 的 redo 日志，应该写入到 log buffer 的哪一个位置）会指向 log buffer 的第一个 block 的偏移量为 12 字节的地方。我们知道，log block header 部分的大小就是 12 字节，因此 lsn 的值在此时为：8704 + 12 = 8716。
 2. 执行 mtr_1（MySQL 把对底层页面中的一次原子访问过程称之为一个 mtr），假设其产生的一组 redo 日志大小为 200 字节，**没有超过**待插入的 block 的剩余空闲空间的大小，此时 lsn 的值为：8716 + 200 = 8916。
 3. 执行 mtr_2，假设其产生的一组 redo 日志大小为 1000 字节，**超过了**待插入的 block 的剩余空闲空间的大小，必须再分配两个 block 才能装下，那么此时 lsn 的值为：8916 + 1000（mtr_2 产生的一组 redo 大小）+ 2 * 12（2 个 log block header 的大小）+ 2 * 4（2 个 log block trailer 的大小）= 9948。
 
-综上所述，**每一组由 mtr 产生的 redo 日志，都有一个唯一的 LSN 值与其对应，LSN 值越小，说明 redo 日志组产生的越早**。
+综上所述，**每一组由 mtr 产生的 redo 日志，都有一个唯一的 lsn 值与其对应，lsn 值越小，说明 redo 日志组产生的越早**。
 
 <br />
 
@@ -129,7 +129,7 @@ redo 日志文件组的每个文件大小都一致，格式也一致。redo 日�
 * buf_next_to_write（标明位置）：用来标记当前的 log buffer 中，有哪些日志已经被刷新到磁盘中了。
 * flushed_to_disk_lsn（表示大小）：用来记录刷新到磁盘中的 redo 日志量。
 * buf_free（标明位置）：指明了后续写入 log buffer 的 redo 日志，应该写入到 log buffer 的哪一个位置。
-* Log Sequeue Number（表示大小）：用来记录已经写入的 redo 日志量。
+* Log Sequeue Number（表示大小）：用来记录当前系统已经写入的 redo 日志量
 
 系统第一次启动时，全局变量`flushed_to_disk_lsn`和`Log Sequeue Number`的大小是相同的，都是 8704。但随着 redo 日志不断的写入 log buffer 中，两个全局变量的值会不断的拉开差距（明显的，新的 redo 日志刚被写入到 log buffer 中时，`Log Sequeue Number`的值会增长，`flushed_to_disk_lsn`的值会不变。随着不断有 log buffer 中的日志被刷新到磁盘上，`flushed_to_disk_lsn`的值才会跟着增长）。当两个全局变量的值再次相同时，就代表 log buffer 中所有的 redo 日志都已经刷新到磁盘中了。
 
@@ -141,19 +141,19 @@ redo 日志文件组的每个文件大小都一致，格式也一致。redo 日�
 
 ---
 
-由每个 mtr 向磁盘中写入多少字节的日志，lsn 的值就增长多少，我们可以得出 lsn 值和 redo 日志文件偏移量的关系。
+由每个 mtr 向磁盘中写入多少字节的日志，lsn 的值就增长多少，我们很容易得出 lsn 值在 redo 日志文件组中的偏移量。
 
 例如，初始时 lsn 值为 8704（lsn 的初始值），对应文件偏移量是 2048（从 redo 日志文件的后半部分开始写）。经过两个 mtr 的执行后，文件偏移量增长到了 3292，那么此时 lsn 的值为：8704 +（3292 - 2048） = 9948。
 
 <br />
 
-### flush 链表中的 LSN
+### flush 链表中的 lsn 
 
 ---
 
 一个 mtr 的执行，不仅可能会产生一组不可分割的 redo 日志，在 mtr 结束时，还会把这一组 redo 日志写入到 log buffer 中。但是 mtr 结束时要做的事情不止于此，mtr 结束时**还会把在 mtr 执行过程中可能修改过的页面对应的控制块，加入到 Buffer Pool 的 flush 链表中**。
 
-第一次修改某个缓存在 Buffer Pool 中的页面时，会把这个页面对应的控制块插入到 flush 链表的**头部**，之后再次修改该页面时，由于其对应的控制块已经在 flush 链表中，所以就不再进行页面对应的控制块的二次插入了。即**flush 链表中的脏页，是按照页面的第一次修改时间，从大到小进行排序的**。在控制块插入到 flush 链表的这个过程中，会在对应的控制块中记录两个关于页面何时修改的属性：
+第一次修改某个缓存在 Buffer Pool 中的页面时，会把这个页面对应的控制块插入到 flush 链表的**头部**，之后再次修改该页面时，由于其对应的控制块已经在 flush 链表中，所以就不再进行页面对应的控制块的二次插入了。即 **flush 链表中的脏页，是按照页面的第一次修改时间，从大到小进行排序的**。在控制块插入到 flush 链表的这个过程中，会在对应的控制块中记录两个关于页面何时修改的属性：
 
 * oldest_modification：页面被加载到 Buffer Pool 中后，进行第一次修改时，会将修改该页面的 mtr 开始时对应的 lsn 值，写入到 oldest_modification 属性中。
 * newest_modification：页面被加载到 Buffer Pool 中后，每一次修改时，都会将修改该页面的 mtr 结束时对应的 lsn 值，写入到 newest_modification 属性中。即该属性表示页面最近一次修改后，对应的系统 lsn 值。
@@ -188,9 +188,69 @@ redo 日志文件组的每个文件大小都一致，格式也一致。redo 日�
 
 这样循环写入 redo 日志造成的问题就是会覆盖曾经写下的 redo 日志，但是，曾经的 redo 日志就不可以被覆盖了吗？当然是可以的。不过也不能随便覆盖，得有个判断标准，这个标准就是**被覆盖的 redo 日志对应的脏页，是否已经刷新到了磁盘里**。至于标准产生原因，如果对应的脏页已经刷新到了磁盘，还留着对应 redo 日志有什么用呢？系统崩溃重启也用不到这些日志呀。
 
-也就是说，对于一个 mtr 修改的页 a（明显的，页 a 是脏页），若页 a 仍在 Buffer Pool 中未被刷新到磁盘，那 mtr 生成的一组 redo 日志在磁盘上的空间，是不可以被覆盖的。若页 a 被刷新到了磁盘，那么页 a 对应的控制块就会从 flush 链表中移除，mtr 生成的一组 redo 日志在磁盘上的空间，就可以被覆盖掉。
+也就是说，对于一个 mtr 修改的页 a（明显的，页 a 是脏页），若页 a 仍在 Buffer Pool 中未被刷新到磁盘，那 mtr 生成的一组 redo 日志在磁盘上的空间，是不可以被覆盖的。若页 a 被刷新到了磁盘，那么页 a 对应的控制块就会从 flush 链表中移除，mtr 生成的一组 redo 日志在磁盘上的空间，就可以被覆盖掉。InnoDB 存在一个**全局变量 checkpoint_lsn**，用来表示系统中可以被覆盖的 redo 日志总量，这个全局变量的初始值也是 8704。
 
-InnoDB 存在一个全局变量 checkpoint_lsn，用来表示系统中可以被覆盖的 redo 日志总量，这个全局变量的初始值也是 8704。
+现在假设一个 mtr 修改的页 a 被刷新到了磁盘，那么 mtr 生成的 redo 日志就可以被覆盖了。此时，我们可以进行一次增加全局变量 checkpoint_lsn 值的操作，这个过程就是**做一次 checkpoint**。
+
+更详细来说，做一次 checkpoint 可以分成两步：
+
+1. 计算一下当前系统中可以被覆盖的 redo 日志对应的 lsn 值最大是多少。
+
+   也就是说，我们只要找到 Buffer Pool 的 flush 链表尾节点对应的 oldest_modification 的值，就知道了全局变量 checkpoint_lsn 的值，把 oldest_modification 的值赋给全局变量 checkpoint_lsn 就好了。
+
+   因为凡是在系统 lsn 值小于 flush 链表尾节点 oldest_modification 值时产生的 redo 日志，都是可以被覆盖掉的（**即小于 checkpoint_lsn 值的  lsn 值对应的 redo 日志，都可以被覆盖掉，这里可以看出 checkpoint_lsn 本质上是一个 lsn 值**）。flush 链表尾节点代表当前系统中最早被修改，但还没有被刷新到磁盘的脏页。
+
+2. 将 checkpoint_lsn、checkpoint_lsn 对应的 redo 日志文件组偏移量 checkpoint_offset 和此次 checkpoint 的编号（**这三个信息我简称为 ccc 信息**），写到 redo 日志文件的管理信息中（redo 日志文件的前 2048 个字节对应的 4 个 block 中的 checkpoint1 或 checkpoint2 中）。
+
+   InnoDB 维护了一个**变量 checkpoint_no**，表示目前系统做了多少次 checkpoint。系统每做一次 checkpoint，变量 checkpoint_no 的值就加 1。
+
+   我们知道，计算一个 lsn 值对应的 redo 日志文件组的偏移量是很容易的，所以可以计算得到 checkpoint_lsn 在 redo 日志文件组中对应的偏移量 checkpoint_offset。然后，我们就可以把 ccc 信息写到 redo 日志文件的管理信息中了。
+
+   但是一组 redo 日志中有许多的 redo 日志文件，我们组内的每个 redo 日志文件的管理信息都要写入 ccc 信息吗？当然不是，ccc 的信息只会被写到 redo 日志文件组的第一个 redo 日志文件的管理信息中。问题又来了，写到管理信息的哪个 block 中呢？InnoDB 规定，当变量 checkpoint_no 的值是偶数时，就将 ccc 信息写到 checkpoint1 中，当变量 checkpoint_no 的值是奇数时，就将 ccc 信息写到 checkpoint2 中。
+
+
+<br />
+
+### 批量从 flush 链表中刷出脏页
+
+---
+
+如果当前系统修改页面的操作十分频繁，会导致写日志的操作也十分频繁，lsn 的值就会增长过快。这样呢，后台的刷脏操作（后台线程对 Buffer Pool 中的 LRU 链表和 flush 链表进行刷新脏页的操作）就可能不能及时的将脏页刷出，系统就无法及时的做 checkpoint。
+
+这时，可能就需要用户线程同步的从 flush 链表中（平常的刷脏操作都是后台线程默默在做），把那些最早修改过的脏页刷新到磁盘了，在刷脏过后，这些脏页对应的 redo 日志就可以被覆盖了，就可以做 checkpoint 了。
+
+<br />
+
+   ### 查看系统中的各个 lsn 值
+
+---
+
+我们可以使用`SHOW ENGINE INNODB STATUS`这样的 SQL 语句查看当前 InnoDB 存储引擎中各个 lsn 值的情况。
+
+```mysql
+-- SQL 语句
+SHOW ENGINE INNODB STATUS;
+
+-- 当前 InnoDB 存储引擎中各个 lsn 值的情况
+...
+-- 系统中的 lsn 值，也就是当前系统已经写入的 redo 日志量，包括写入 log buffer 中的日志
+Log sequence number 124476971
+-- flushed_to_disk_lsn 的值，即刷新到磁盘中的 redo 日志量
+Log flushed up to   124099769
+-- Buffer Pool 的 flush 链表尾节点对应的 oldest_modification 属性值
+Pages flushed up to 124052503
+-- 当前系统的 checkpoint_lsn 值
+Last checkpoint at  124052494
+...
+```
+
+<br />
+
+###  innodb_flush_log_at_trx_commit 的用法
+
+---
+
+
 
 
 
