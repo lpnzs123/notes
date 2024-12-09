@@ -314,27 +314,39 @@ redo 日志写入 block 是**顺序**写入的，即写满一个 block 后才会
 
 * 方案二：跳过已经刷新到磁盘的页面。
 
-  checkpoint_lsn 之前的 redo 日志对应的脏页已经被刷盘了，我们不必在意。但是 checkpoint_lsn 之后的 redo 日志对应的脏页，有些可能已经刷盘了，有些可能没刷，我们怎么能找出哪些是刷了的，哪些是没刷的呢？只要找出来了，就可以跳过这些已经被刷盘的脏页了。
-
   我们知道，每个页面都有一个称之为 File Header 的部分。在 File Header 部分中有一个称之为 **FIL_PAGE_LSN** 的属性，该属性记载了最近一次修改该页面时的 lsn 值（即该页面对应控制块中的 newest_modification 值）。
 
-  checkpoint_lsn 是一个分界点。一些页面如果在 checkpoint 之后发生了修改，那么这些页面的 FIL_PAGE_LSN 属性值一定会大于 checkpoint_lsn 的值。
+  checkpoint_lsn 是一个分界点。一些脏页如果在 checkpoint 之后被刷新到了磁盘中，那么这些脏页的 FIL_PAGE_LSN 属性值一定会大于 checkpoint_lsn 的值。对于 lsn 值小于 checkpoint_lsn 的 redo 日志来说，它们是可以被新的 redo 日志覆盖的（也就是没用了），自然不必执行。对于 lsn 值在一个页的 FIL_PAGE_LSN 和 checkpoint_lsn 之间的 redo 日志，若该页已被刷新到磁盘，则对应的 redo 日志也不必执行（即对该页而言，lsn 值小于 FIL_PAGE_LSN 的 redo 日志不必执行）。
 
-  （未完成...）
+  这样，我们就更进一步的提升了崩溃恢复的速度。
+  
 
-  ```mysql
-  理论上，存在极少数情况下，页面 A 的 FIL_PAGE_LSN 可能是 1500，但页面 A 没有包含所有 LSN 小于或等于 1500 的修改。这种情况通常是由于系统故障或硬件问题引起的，例如：
-  
-  电源故障：如果在页面 A 被修改后、FIL_PAGE_LSN 被更新之前，服务器突然断电，可能会导致页面 A 的 FIL_PAGE_LSN 被错误地更新，而实际的修改还没有完成。
-  硬件故障：如果存储设备出现故障，可能会导致页面 A 的 FIL_PAGE_LSN 被错误地写入，而实际的页面内容没有被正确更新。
-  然而，InnoDB 通过多种机制来防止这种情况的发生：
-  
-  同步写入重做日志：InnoDB 保证重做日志的写入操作是同步的，确保在页面被修改之前，相关的重做日志已经被写入磁盘。
-  双重写缓冲区：如前所述，双重写缓冲区可以防止页面部分写入失败的情况，确保页面的完整性和一致性。
-  崩溃恢复机制：即使在极端情况下，InnoDB 的崩溃恢复机制可以通过重做日志恢复未持久化的修改，确保数据的一致性。
-  ```
+<br />
 
-  
+### 遗漏的问题：LOG_BLOCK_HDR_NO 是如何计算的
+
+---
+
+对于普通的 block 而言，其结构的 log block header 部分，有一个称之为 LOG_BLOCK_HDR_NO 的属性，每个 block 都有一个大于 0 的唯一标号，而这个标号就是 LOG_BLOCK_HDR_NO 的属性值。
+
+这个属性是初次使用 block 时分配给 block 的，其值跟当时的系统 lsn 值有关，计算 block 的 LOG_BLOCK_HDR_NO 属性值的公式如下：
+
+```mysql
+-- 计算 block 的 LOG_BLOCK_HDR_NO 属性值的公式
+((lsn / 512) & 0x3FFFFFFFUL) + 1
+```
+
+0x3FFFFFFFUL 化成二进制数的形式共有 32 位，除前两位为 0 外其余位都为 1。这个数与`(lsn / 512)`进行与运算得出来的值再加 1，最后的结果值肯定在 1 到 0x40000000UL 之间，而 0x40000000UL 这个值就是 1GB。
+
+也就是说，LOG_BLOCK_HDR_NO 属性值最多是 1GB 个，这 1GB 个 LOG_BLOCK_HDR_NO 属性值各不相同。
+
+InnoDB 规定，**redo 日志文件组中包含的所有文件大小总和，不得超过 512GB**。而一个 block 的大小就是 512 字节，这也就意味着，**redo 日志文件组中包含的 block 块，最多是 1GB 个**（512GB = 512 字节 * 1GB = 512 字节 * 1024 * 1024 * 1024）。因此，LOG_BLOCK_HDR_NO 不重复的属性值最多是 1GB 个，这个 1GB 个也就够用了。
+
+另外，LOG_BLOCK_HDR_NO 值的第一个比特位被称之为 flush bit，若该比特位为 1，代表着 LOG_BLOCK_HDR_NO 属性对应的 block，是在某次将 log buffer 中的 block 刷新到磁盘的操作中的第一个被刷入的 block。
+
+
+
+
 
   
 
