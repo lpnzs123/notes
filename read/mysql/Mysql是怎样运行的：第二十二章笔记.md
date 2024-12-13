@@ -169,7 +169,7 @@ INSERT INTO undo_demo(id, key1, col) VALUES (1, 'AWM', '狙击枪');
 2. undo type：TRX_UNDO_INSERT_REC
 3. undo no：0
 4. table id：138
-5. 主键各列信息（结构为 <len, value>）： <4, 1>
+5. 主键各列信息（结构为 <len, value>）：<4, 1>
 6. start of record：地址
 
 这里需要注意的是主键各列信息字段的值为 <4, 1>，1 我们知道，就是插入记录的主键值 1，但是 4 呢？
@@ -296,9 +296,69 @@ InnoDB 设计了一种称为 TRX_UNDO_DEL_MARK_REC 类型的 undo 日志，他�
   
 * 索引列各列信息主要用在事务提交后，对中间状态记录做真正删除的阶段二（即 purge 阶段）里。
 
-（该介绍的我们介绍完了，未完待续...）
+现在我们删除一条 undo_demo 表中的记录，看看产生的 undo 日志的内容是什么。
 
-  
+```mysql
+-- 开启事务，假设该事务的 id 为 101
+BEGIN;
+
+-- 插入语句 2
+INSERT INTO undo_demo(id, key1, col) VALUES (2, 'M416', '步枪');
+
+-- 删除语句 1
+DELETE FROM undo_demo WHERE id = 2; 
+```
+
+明显的，id 为 101 的事务会产生两个 undo 日志，一个是由插入语句 2 产生的 undo 日志 1，一个是由删除语句 1 产生的 undo 日志 2，我们先来看看 undo 日志 1 的内容（各个部分按序号顺序，从上到下排列）：
+
+1. end of record：地址
+2. undo type：TRX_UNDO_INSERT_REC
+3. undo no：0（解析：id 为 101 的事务产生的第 1 条 undo 日志，因此 undo no 为 0）
+4. table id：138
+5. 主键各列信息（结构为 <len, value>）：<4, 2>
+6. start of record：地址
+
+而后我们再来看看 undo 日志 2 的内容（各个部分按序号顺序，从上到下排列）：
+
+1. end of record：地址
+2. undo type：TRX_UNDO_DEL_MARK_REC
+3. undo no：**1**（解析：id 为 101 的事务产生的第 2 条 undo 日志，因此 undo no 为 1）
+4. table id：138
+5. info bits：略
+6. old trx_id：**101**（解析：id 为 2 的记录的隐藏列 trx_id 为 101，即对该记录最近的一次修改就发生在 id 为 101 的事务中，因此将 101 填入 undo 日志 2 的 old trx_id 属性中）
+7. old roll_pointer：**指向 undo 日志 1**（解析：将 id 为 2 的记录的 roll_pointer 值取出填到 undo 日志 2 的 old roll_pointer 属性中，因为 roll_pointer 指向 undo 日志 1，因此 old roll_pointer 指向 undo 日志 1。这样，我们就可以通过 old roll_pointer 属性值，找到最近一次对 id 为 2 的记录做改动时，产生的 undo 日志了，也就是 undo 日志 1）
+8. 主键各列信息（结构为 <len, value>）：<4, 2>
+9. index_col_info len：13
+10. 索引列各列信息（结构为 < pos, len, value>）：<0, 4, 2>、<3, 4, 'M416'>
+11. start of record：地址
+
+需要注意的是**索引列各列信息**，在 undo_demo 表中存在 2 个索引，分别是聚簇索引和二级索引 idx_key1。对于索引列各列信息来说，**只要是索引中的列**，就需要记录该列在记录中的位置（即 pos）、该列占用的存储空间大小（即 len）和该列的实际值（即 value）这三个信息到 undo 日志的索引列各列信息中。接下来，我们来看看 undo 日志的索引列各列信息是如何得到的：
+
+* 对于主键来说，它只包含一个 id 列，我们分别分析一下 id 列的 pos、len 和 value。
+
+  * pos（占用 1 字节）：id 列是主键，是记录的第一列，因此 pos 值为 0。
+  * len（占用 1 字节）：id 列类型为 INT，因此 len 值为 4。
+  * value（占用 4 字节）：被删除的记录 id 列值为 2，因此 value 值为 2。
+
+  由上可知，对于 id 列而言，最终的存储结果为 <0, 4, 2>，存储这些信息占用的存储空间大小为 1 + 1 + 4 = 6 字节。
+
+* 对于 idx_key1 来说，它只包含一个 key1 列，我们分别分析一下 key1 列的 pos、len 和 value。
+
+  * pos（占用 1 个字节）：key1 列排在 id 列、trx_id 列和 roll_pointer 列之后，是记录的第四列，因此 pos 值为 3。
+  * len（占用 1 字节）：key1 列的类型为 VARCHAR(100)，使用 utf8 字符集。被删除的记录 key1 列存储的内容为 M416，一共占用 4 个字节，因此 len 值为 4。
+  * value（占用 3 字节）：被删除的记录 key1 列值为 M416，因此 value 值为 M416。
+
+  由上可知，对于 key1 列而言，最终的存储结果为 <3, 4, 'M416'>，存储这些信息占用的存储空间大小为 1 + 1 + 3 = 5 字节。
+
+综上所述，undo 日志 2 的索引列各列信息共占用 11 字节（6 字节 + 5 字节），又因为 undo 日志 2 的 index_col_info len 属性本身占用 2 字节，因此 undo 日志 2 的 index_col_info len 属性值为 13（11 字节 + 2 字节）。
+
+<br />
+
+#### UPDATE 操作对应的 undo 日志
+
+---
+
+
 
 ​     
 
